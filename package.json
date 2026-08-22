@@ -17,10 +17,10 @@
     "build:servidor-exe": "tsc -p tsconfig.servidor-exe.json && node scripts/copiar-servidor-exe.js",
     "build:setup": "tsc -p tsconfig.setup.json && node scripts/compilar-setup.js",
     "build:app": "npm run build:servidor && electron-vite build",
-    "package": "npm run build:servidor && electron-vite build && electron-builder",
-    "package:portable": "npm run build:app && electron-builder --config electron-builder.portable.yml",
+    "package": "npm run build:servidor && electron-vite build && electron-builder --publish never",
+    "package:portable": "npm run build:app && electron-builder --config electron-builder.portable.yml --publish never",
     "package:servidor": "npm run build:servidor && npm run build:servidor-exe && electron-builder --config electron-builder.servidor.yml --config.extraMetadata.main=out/servidor-exe/servidor-exe/main.js",
-    "package:setup": "npm run build:setup && electron-builder --config electron-builder.setup.yml --config.extraMetadata.main=out/setup-launcher/main.js",
+    "package:setup": "npm run build:setup && electron-builder --config electron-builder.setup.yml --config.extraMetadata.main=out/setup-launcher/main.js --publish never",
     "publicar": "node scripts/publicar-versao.js"
   },
   "dependencies": {
