@@ -1,0 +1,97 @@
+import { contextBridge, ipcRenderer } from 'electron'
+
+const api = {
+  db: {
+    all: (sql: string, params: unknown[] = []) => ipcRenderer.invoke('db:all', sql, params),
+    get: (sql: string, params: unknown[] = []) => ipcRenderer.invoke('db:get', sql, params),
+    run: (sql: string, params: unknown[] = []) => ipcRenderer.invoke('db:run', sql, params),
+    exec: (sql: string) => ipcRenderer.invoke('db:exec', sql)
+  },
+  auth: {
+    login: (login: string, senha: string) => ipcRenderer.invoke('auth:login', login, senha),
+    logout: () => ipcRenderer.invoke('auth:logout'),
+    session: () => ipcRenderer.invoke('auth:session'),
+    criarUsuario: (dados: {
+      nome: string
+      login: string
+      senha: string
+      perfil: string
+      comissao: number
+    }) => ipcRenderer.invoke('auth:criarUsuario', dados),
+    alterarSenha: (usuarioId: number, novaSenha: string) =>
+      ipcRenderer.invoke('auth:alterarSenha', usuarioId, novaSenha),
+    atualizarUsuario: (dados: {
+      usuarioId: number
+      nome: string
+      login: string
+      perfil: string
+      comissao: number
+      senha?: string
+    }) => ipcRenderer.invoke('auth:atualizarUsuario', dados)
+  },
+  backup: {
+    manual: () => ipcRenderer.invoke('backup:manual')
+  },
+  versao: () => ipcRenderer.invoke('app:versao') as Promise<string>,
+  update: {
+    verificar: () => ipcRenderer.invoke('update:verificar'),
+    instalar: () => ipcRenderer.invoke('update:instalar'),
+    getConfig: () => ipcRenderer.invoke('update:getConfig'),
+    setConfig: (url: string) => ipcRenderer.invoke('update:setConfig', url)
+  },
+  janela: {
+    fullscreen: (ativo: boolean) => ipcRenderer.invoke('janela:fullscreen', ativo)
+  },
+  imagem: {
+    definir: (produtoId: number) => ipcRenderer.invoke('imagem:definir', produtoId),
+    get: (produtoId: number) => ipcRenderer.invoke('imagem:get', produtoId),
+    list: () => ipcRenderer.invoke('imagem:list'),
+    listPorIds: (ids: number[]) => ipcRenderer.invoke('imagem:listPorIds', ids),
+    remover: (produtoId: number) => ipcRenderer.invoke('imagem:remover', produtoId)
+  },
+  importar: {
+    lerArquivo: () => ipcRenderer.invoke('importar:lerArquivo')
+  },
+  zonas: {
+    exportar: () => ipcRenderer.invoke('zonas:exportar'),
+    importar: () => ipcRenderer.invoke('zonas:importar')
+  },
+  caixas: {
+    exportar: () => ipcRenderer.invoke('caixas:exportar'),
+    importar: () => ipcRenderer.invoke('caixas:importar')
+  },
+  catalogo: {
+    status: () => ipcRenderer.invoke('catalogo:status'),
+    config: (dados: Record<string, string | undefined>) => ipcRenderer.invoke('catalogo:config', dados),
+    getConfig: () => ipcRenderer.invoke('catalogo:getConfig'),
+    sync: () => ipcRenderer.invoke('catalogo:sync'),
+    testar: () => ipcRenderer.invoke('catalogo:testar'),
+    getExibicao: () => ipcRenderer.invoke('catalogo:getExibicao'),
+    salvarExibicao: (dados: Record<string, unknown>) => ipcRenderer.invoke('catalogo:salvarExibicao', dados)
+  },
+  servidor: {
+    status: () => ipcRenderer.invoke('servidor:status'),
+    logs: () => ipcRenderer.invoke('servidor:logs'),
+    limparLogs: () => ipcRenderer.invoke('servidor:limparLogs'),
+    backupInfo: () => ipcRenderer.invoke('servidor:backupInfo'),
+    diagnostico: () => ipcRenderer.invoke('servidor:diagnostico'),
+    corrigir: () => ipcRenderer.invoke('servidor:corrigir'),
+    zerar: (alvos: string[]) => ipcRenderer.invoke('servidor:zerar', alvos),
+    restaurar: () => ipcRenderer.invoke('servidor:restaurar'),
+    conexao: () => ipcRenderer.invoke('servidor:conexao'),
+    configurarConexao: (opcoes: { local?: boolean; ip?: string }) => ipcRenderer.invoke('servidor:configurarConexao', opcoes),
+    testar: () => ipcRenderer.invoke('servidor:testar')
+  },
+  estoque: {
+    movimentar: (dados: Record<string, unknown>) => ipcRenderer.invoke('estoque:movimentar', dados),
+    inventarioAbrir: (dados: { produtos: number[]; usuario_id?: number | null; observacao?: string | null }) =>
+      ipcRenderer.invoke('estoque:inventarioAbrir', dados),
+    inventarioFinalizar: (dados: { inventario_id: number; usuario_id?: number | null }) =>
+      ipcRenderer.invoke('estoque:inventarioFinalizar', dados),
+    inventarioCancelar: (dados: { inventario_id: number }) => ipcRenderer.invoke('estoque:inventarioCancelar', dados)
+  }
+}
+
+contextBridge.exposeInMainWorld('api', api)
+
+export type Api = typeof api

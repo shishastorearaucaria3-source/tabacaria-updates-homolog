@@ -1,0 +1,182 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  background: #f1f5f9;
+  color: #0f172a;
+  user-select: none;
+}
+
+.janela {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 600px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 24px;
+  background: linear-gradient(135deg, #15803d, #22c55e);
+  color: #fff;
+}
+
+.logo {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 20px;
+}
+
+header h1 { font-size: 18px; font-weight: 700; }
+header .sub { font-size: 12px; opacity: 0.85; }
+
+main {
+  flex: 1;
+  padding: 22px 24px;
+  overflow-y: auto;
+}
+
+section h2 {
+  font-size: 16px;
+  margin-bottom: 14px;
+  color: #1e293b;
+}
+
+.oculto { display: none !important; }
+
+.opcao {
+  display: flex;
+  gap: 12px;
+  padding: 14px;
+  border: 2px solid #e2e8f0;
+  border-radius: 10px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  background: #fff;
+}
+
+.opcao:hover { border-color: #94a3b8; }
+.opcao:has(input:checked) { border-color: #16a34a; background: #f0fdf4; }
+.opcao input { margin-top: 4px; accent-color: #16a34a; }
+.opcao strong { display: block; font-size: 14px; }
+.opcao p { font-size: 12px; color: #475569; margin-top: 4px; }
+
+button {
+  padding: 10px 18px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+button:hover { background: #f1f5f9; }
+button:disabled { opacity: 0.5; cursor: default; }
+
+button.primario {
+  background: #16a34a;
+  border-color: #16a34a;
+  color: #fff;
+}
+
+button.primario:hover { background: #15803d; }
+
+button.perigo {
+  background: #fff;
+  border-color: #fca5a5;
+  color: #b91c1c;
+}
+
+button.perigo:hover { background: #fef2f2; }
+
+.acoes { display: flex; gap: 10px; margin-top: 18px; }
+
+.versoes {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.versoes div { display: flex; justify-content: space-between; font-size: 13px; }
+.versoes span { color: #475569; }
+.versoes strong { color: #0f172a; }
+
+label { display: block; font-size: 13px; font-weight: 600; color: #334155; margin-bottom: 12px; }
+label input {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 9px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 14px;
+  color: #0f172a;
+}
+
+.status { padding: 10px 12px; border-radius: 8px; font-size: 13px; margin-top: 4px; background: #f8fafc; border: 1px solid #e2e8f0; }
+.status.sucesso { background: #f0fdf4; border-color: #86efac; color: #166534; }
+.status.erro { background: #fef2f2; border-color: #fca5a5; color: #991b1b; }
+
+.barra {
+  height: 12px;
+  border-radius: 6px;
+  background: #e2e8f0;
+  overflow: hidden;
+  margin: 14px 0 10px;
+}
+
+#barra-preenchida {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #16a34a, #22c55e);
+  transition: width 0.2s;
+}
+
+#texto-progresso { font-size: 13px; color: #334155; }
+#etapa-progresso { font-size: 12px; color: #64748b; margin-top: 4px; word-break: break-all; }
+.aviso {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  color: #92400e;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+@keyframes barra-pulso {
+  0% { opacity: 1; }
+  50% { opacity: 0.45; }
+  100% { opacity: 1; }
+}
+
+.barra.ociosa #barra-preenchida {
+  animation: barra-pulso 1.2s ease-in-out infinite;
+}
+
+#texto-concluido, #texto-erro { font-size: 13px; color: #334155; line-height: 1.5; }
+
+footer {
+  padding: 12px 24px;
+  border-top: 1px solid #e2e8f0;
+  font-size: 12px;
+  color: #64748b;
+  background: #fff;
+}

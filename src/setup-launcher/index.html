@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'" />
+  <title>Instalar NossoSistema</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="janela">
+    <header>
+      <div class="logo">NS</div>
+      <div>
+        <h1>INSTALAR NOSSO SISTEMA</h1>
+        <p class="sub">Instalação e atualização do sistema de loja</p>
+      </div>
+    </header>
+
+    <main>
+      <!-- Passo 1: escolha do tipo de instalação -->
+      <section id="passo-escolha">
+        <h2>Escolha o tipo de instalação</h2>
+        <label class="opcao">
+          <input type="radio" name="tipo" value="servidor" checked />
+          <div>
+            <strong>Servidor + Sistema</strong>
+            <p>Instala o servidor local, API, banco e aplicativo completo. O computador funciona como servidor.</p>
+          </div>
+        </label>
+        <label class="opcao">
+          <input type="radio" name="tipo" value="cliente" />
+          <div>
+            <strong>Somente Sistema</strong>
+            <p>Instala apenas o aplicativo/PDV para conectar a um servidor existente.</p>
+          </div>
+        </label>
+        <button id="btn-continuar" class="primario">Continuar</button>
+      </section>
+
+      <!-- Instalação existente -->
+      <section id="passo-existente" class="oculto">
+        <h2>Sistema já instalado</h2>
+        <div class="versoes">
+          <div><span>Versão atual:</span><strong id="versao-atual">—</strong></div>
+          <div><span>Nova versão:</span><strong id="versao-nova">—</strong></div>
+          <div><span>Tipo:</span><strong id="tipo-atual">—</strong></div>
+        </div>
+        <div class="acoes">
+          <button id="btn-atualizar" class="primario">Atualizar</button>
+          <button id="btn-reinstalar">Reinstalar</button>
+          <button id="btn-desinstalar" class="perigo">Desinstalar</button>
+          <button id="btn-cancelar">Cancelar</button>
+        </div>
+      </section>
+
+      <!-- Progresso -->
+      <section id="passo-progresso" class="oculto">
+        <h2 id="titulo-progresso">Instalando…</h2>
+        <div class="barra"><div id="barra-preenchida"></div></div>
+        <p id="texto-progresso">Preparando…</p>
+        <p id="etapa-progresso" class="sub"></p>
+        <p id="aviso-progresso" class="aviso">Pode levar alguns minutos. Não feche esta janela.</p>
+      </section>
+
+      <!-- Concluído -->
+      <section id="passo-concluido" class="oculto">
+        <h2 id="titulo-concluido">Instalação concluída</h2>
+        <p id="texto-concluido"></p>
+        <div class="acoes">
+          <button id="btn-abrir" class="primario">Abrir sistema</button>
+          <button id="btn-fechar">Fechar</button>
+        </div>
+      </section>
+
+      <!-- Erro -->
+      <section id="passo-erro" class="oculto">
+        <h2>Falha na instalação</h2>
+        <p id="texto-erro"></p>
+        <div class="acoes"><button id="btn-erro-fechar" class="primario">Fechar</button></div>
+      </section>
+    </main>
+
+    <footer>
+      <span id="rodape-versao">Versão 1.0.0</span>
+    </footer>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

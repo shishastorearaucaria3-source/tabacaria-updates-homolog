@@ -1,0 +1,23 @@
+appId: br.com.lojatabacaria.setup
+productName: NossoSistema Setup
+directories:
+  output: dist-setup
+files:
+  - out/setup-launcher/**/*
+  - package.json
+extraResources:
+  - from: dist-final/win-unpacked
+    to: embedded/app
+win:
+  icon: build/icones/sistema.png
+  target:
+    - nsis
+nsis:
+  oneClick: true
+  perMachine: false
+  allowElevation: false
+  createDesktopShortcut: false
+  createStartMenuShortcut: false
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  artifactName: NossoSistema-Setup.exe

@@ -1,0 +1,35 @@
+node_modules/
+out/
+dist/
+dist-final/
+dist-setup/
+dist-servidor/
+release/
+backups/
+nexbackuptotal/
+
+# segredos / credenciais / certificados
+.env
+.env.*
+*.env
+*.pfx
+*.p12
+*.pem
+*.key
+*.crt
+*token*
+credentials*.json
+
+# dados locais / sensíveis
+MEMORIA.md
+docs/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.db
+
+# artefatos de build
+*.tsbuildinfo
+*.log
+.DS_Store

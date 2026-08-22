@@ -1,0 +1,19 @@
+appId: br.com.lojatabacaria.servidor
+productName: Servidor Sistema Loja Tabacaria
+directories:
+  output: dist-servidor
+files:
+  - out/servidor-exe/**/*
+  - out/server/**/*
+  - out/shared/**/*
+  - build/icones/servidor.png
+  - package.json
+asarUnpack:
+  - "**/*.node"
+  - out/server/**/*
+  - out/shared/**/*
+win:
+  icon: build/icones/servidor.png
+  target:
+    - portable
+artifactName: NossoSistema-Servidor.exe

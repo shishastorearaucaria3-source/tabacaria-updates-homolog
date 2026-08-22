@@ -1,0 +1,136 @@
+name: Assinar e publicar release (Sigstore keyless)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag da release (ex.: v1.0.1)'
+        required: true
+        default: ''
+      rollback:
+        description: 'Publicar como rollback (permite downgrade)?'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  build-sign-release:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Versão do build a partir da tag
+        shell: pwsh
+        run: |
+          $v = ($env:TAG -replace '^v', '')
+          Write-Output "Versão: $v"
+          node -e "const fs=require('fs');const f='package.json';const j=JSON.parse(fs.readFileSync(f,'utf8'));j.version=process.argv[1];fs.writeFileSync(f,JSON.stringify(j,null,2)+'\n')" "$v"
+
+      - name: Build app + instalador NSIS
+        run: npm run package
+
+      - name: Build portátil (canal de atualização)
+        run: npm run package:portable
+
+      - name: Build instalador customizado (NossoSistema-Setup)
+        run: npm run package:setup
+
+      - name: Gerar SHA256SUMS
+        shell: pwsh
+        run: |
+          $exes = @()
+          $exes += Get-ChildItem -LiteralPath 'dist-final' -Filter '*.exe' | ForEach-Object { $_.FullName }
+          $exes += Get-ChildItem -LiteralPath 'dist-setup' -Filter '*.exe' | ForEach-Object { $_.FullName }
+          $lines = foreach ($e in $exes) {
+            $h = (Get-FileHash -LiteralPath $e -Algorithm SHA256).Hash.ToLower()
+            "{0}  {1}" -f $h, (Split-Path $e -Leaf)
+          }
+          $lines | Set-Content -LiteralPath 'SHA256SUMS' -Encoding ASCII
+          Write-Output "SHA256SUMS:"
+          Get-Content -LiteralPath 'SHA256SUMS'
+
+      - name: Montar release/ + manifest.json (canal GitHub)
+        shell: pwsh
+        run: |
+          $extra = @()
+          if ('${{ inputs.rollback }}' -eq 'true') { $extra += '--rollback' }
+          node scripts/publicar-versao.js --montar-only --repo $env:GITHUB_REPOSITORY --tag $env:TAG @extra
+          Write-Output "--- manifest.json ---"
+          Get-Content -LiteralPath 'release/manifest.json'
+
+      - name: Instalar cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Assinar e verificar instaladores (keyless)
+        shell: pwsh
+        run: |
+          $exes = @()
+          $exes += Get-ChildItem -LiteralPath 'dist-final' -Filter '*.exe' | ForEach-Object { $_.FullName }
+          $exes += Get-ChildItem -LiteralPath 'dist-setup' -Filter '*.exe' | ForEach-Object { $_.FullName }
+          New-Item -ItemType Directory -Path 'artifacts' -Force | Out-Null
+          $identity = "https://github.com/$env:GITHUB_REPOSITORY/.github/workflows/release.yml@$env:GITHUB_REF"
+          $issuer = 'https://token.actions.githubusercontent.com'
+          foreach ($e in $exes) {
+            $name = (Split-Path $e -Leaf) -replace '[^A-Za-z0-9._-]', '_'
+            $bundle = "artifacts/$name.sigstore.json"
+            Write-Output ">> Assinando: $e"
+            cosign sign-blob --yes --bundle $bundle $e
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            Write-Output ">> Verificando: $e"
+            cosign verify-blob --bundle $bundle --certificate-identity $identity --certificate-oidc-issuer $issuer $e
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          Write-Output ">> Artefatos de assinatura:"
+          Get-ChildItem -LiteralPath 'artifacts' | Select-Object Name, Length
+
+      - name: Criar GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: ${{ env.TAG }}
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          files: |
+            dist-final/*.exe
+            dist-setup/*.exe
+            artifacts/*.sigstore.json
+            SHA256SUMS
+            release/notas.txt
+
+      - name: Preparar páginas (manifest.json do canal)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path 'pages' -Force | Out-Null
+          Copy-Item -LiteralPath 'release/manifest.json' -Destination 'pages/'
+          if (Test-Path -LiteralPath 'release/notas.txt') { Copy-Item -LiteralPath 'release/notas.txt' -Destination 'pages/' }
+          Get-Content -LiteralPath 'pages/manifest.json'
+
+      - name: Publicar canal de atualização (GitHub Pages)
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ./pages
+          force_orphan: true
