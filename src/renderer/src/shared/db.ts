@@ -3,6 +3,40 @@ export interface DbApi {
   get: (sql: string, params?: unknown[]) => Promise<unknown>
   run: (sql: string, params?: unknown[]) => Promise<{ changes: number; lastInsertRowid: number }>
   exec: (sql: string) => Promise<void>
+  transacao: (statements: { sql: string; params?: unknown[] }[]) => Promise<{
+    ok: boolean
+    resultados?: { changes: number; lastInsertRowid: number }[]
+    indice?: number
+    erro?: string
+  }>
+}
+
+export interface VendasCancelApi {
+  cancelar: (vendaId: number, usuarioId: number) => Promise<{ ok: boolean; numero?: string; itens_devolvidos?: number; erro?: string }>
+  finalizar: (dados: {
+    itens: { produto_id: number; nome: string; quantidade: number; preco_unitario: number; desconto?: number; observacao?: string | null }[]
+    pagamentos: { forma: string; valor: number }[]
+    subtotal: number
+    desconto: number
+    total: number
+    vendedor_id?: number | null
+    caixa_id?: number | null
+    usuario_id?: number | null
+  }) => Promise<{ ok: boolean; numero: string; venda_id: number; erro?: string; codigo?: string }>
+}
+
+export interface PedidosCancelApi {
+  cancelar: (pedidoId: number, usuarioId: number) => Promise<{ ok: boolean; estoque_devolvido?: boolean; erro?: string }>
+}
+
+export function getVendasCancelApi(): VendasCancelApi {
+  const win = window as unknown as { api: { vendas: VendasCancelApi } }
+  return win.api.vendas
+}
+
+export function getPedidosCancelApi(): PedidosCancelApi {
+  const win = window as unknown as { api: { pedidosApi: PedidosCancelApi } }
+  return win.api.pedidosApi
 }
 
 export interface Usuario {
@@ -152,8 +186,10 @@ export interface ServidorApi {
   zerar: (alvos: string[]) => Promise<{ ok: boolean; removidos: string[]; erro?: string }>
   restaurar: () => Promise<{ ok: boolean; erro?: string }>
   conexao: () => Promise<{ ips: string[]; url: string; local: boolean }>
-  configurarConexao: (opcoes: { local?: boolean; ip?: string }) => Promise<{ ok: boolean; url: string; ips: string[] }>
+  configurarConexao: (opcoes: { local?: boolean; ip?: string; url?: string; apiKey?: string }) => Promise<{ ok: boolean; url: string; ips: string[] }>
   testar: () => Promise<{ ok: boolean; url: string; erro?: string }>
+  apiKeyGet: () => Promise<{ ok: boolean; api_key: string }>
+  apiKeyRegenerar: () => Promise<{ ok: boolean; api_key: string }>
 }
 
 export function getServidorApi(): ServidorApi {

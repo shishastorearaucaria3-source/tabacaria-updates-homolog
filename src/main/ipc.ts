@@ -357,9 +357,33 @@ export function registerDbHandlers(): void {
     }
   })
 
-  ipcMain.handle('servidor:configurarConexao', async (_e, opcoes: { local?: boolean; ip?: string }) => {
+  ipcMain.handle('servidor:configurarConexao', async (_e, opcoes: { local?: boolean; ip?: string; url?: string; apiKey?: string }) => {
     const r = configurarConexaoServidor(opcoes ?? {})
     return { ok: true, url: r.url, ips: r.ips }
+  })
+
+  ipcMain.handle('db:transacao', (_e, statements: { sql: string; params?: unknown[] }[]) => {
+    return servidorClient.dbTransacao(statements ?? [])
+  })
+
+  ipcMain.handle('vendas:cancelar', (_e, vendaId: number, usuarioId: number) => {
+    return servidorClient.vendasCancelar(vendaId, usuarioId)
+  })
+
+  ipcMain.handle('vendas:finalizar', (_e, dados: Record<string, unknown>) => {
+    return servidorClient.vendasFinalizar(dados as Parameters<typeof servidorClient.vendasFinalizar>[0])
+  })
+
+  ipcMain.handle('pedidos:cancelar', (_e, pedidoId: number, usuarioId: number) => {
+    return servidorClient.pedidosCancelar(pedidoId, usuarioId)
+  })
+
+  ipcMain.handle('servidor:apiKeyGet', async () => {
+    return servidorClient.apiKeyGet()
+  })
+
+  ipcMain.handle('servidor:apiKeyRegenerar', async () => {
+    return servidorClient.apiKeyRegenerar()
   })
 
   ipcMain.handle('servidor:testar', async () => {

@@ -62,14 +62,16 @@ export default function Login({ onLogin }: { onLogin: (u: Usuario) => void }) {
         const salvo = localStorage.getItem('nex_ultimo_login')
         if (salvo) {
           const i = lista.findIndex((u) => u.login === salvo)
-          if (i !== -1) {
-            setIdx(i)
-            const senhaSalva = localStorage.getItem('nex_senha_salva')
-            if (senhaSalva) setSenha(senhaSalva)
-          }
+          if (i !== -1) setIdx(i)
         }
       })
       .catch(() => {})
+  }, [])
+
+  // Segurança: senhas nunca são persistidas neste computador. Remove qualquer
+  // senha gravada por versões anteriores (ficavam em texto plano no localStorage).
+  useEffect(() => {
+    try { localStorage.removeItem('nex_senha_salva') } catch { /* ignore */ }
   }, [])
 
   const usuarioAtual = idx >= 0 && usuarios[idx] ? usuarios[idx] : null
@@ -119,9 +121,9 @@ export default function Login({ onLogin }: { onLogin: (u: Usuario) => void }) {
     if (res.ok && res.usuario) {
       try {
         localStorage.setItem('nex_ultimo_login', usuarioAtual.login)
-        if (lembrar) localStorage.setItem('nex_senha_salva', senha)
-        else localStorage.removeItem('nex_senha_salva')
+        // "Lembrar" guarda apenas o login — a senha NUNCA é persistida.
         localStorage.setItem('nex_lembrar_login', lembrar ? '1' : '0')
+        localStorage.removeItem('nex_senha_salva')
       } catch { /* ignore */ }
       onLogin(res.usuario)
     } else {
@@ -247,10 +249,10 @@ export default function Login({ onLogin }: { onLogin: (u: Usuario) => void }) {
         )}
 
         {erro && <div className="login-erro">{erro}</div>}
-        <label className="login-lembrar">
-          <input type="checkbox" checked={lembrar} onChange={(e) => setLembrar(e.target.checked)} />
-          Lembrar senha neste computador
-        </label>
+            <label className="login-lembrar">
+              <input type="checkbox" checked={lembrar} onChange={(e) => setLembrar(e.target.checked)} />
+              Lembrar meu login neste computador
+            </label>
         <button type="submit" className="btn-primario btn-login" disabled={!usuarioAtual}>
           Entrar
         </button>

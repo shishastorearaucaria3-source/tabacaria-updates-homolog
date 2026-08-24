@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { getDbApi } from '../../shared/db'
+import { getDbApi, getAuthApi, getVendasCancelApi } from '../../shared/db'
 import Delivery from '../delivery/Delivery'
 import EditarPedido from '../delivery/EditarPedido'
 import PainelPedido from './PainelPedido'
@@ -322,22 +322,25 @@ export default function Vendas({ onNovaVenda, onEditarPedido, onNovoPedido, onNo
 
   const cancelarVenda = async (v: Venda) => {
     if (!confirm(`Cancelar a venda ${v.numero} de R$ ${v.total.toFixed(2)}?`)) return
-    const db = getDbApi()
-    const itens = (await db.all(
-      `SELECT produto_id, quantidade FROM venda_itens WHERE venda_id = ?`,
-      [v.id]
-    )) as unknown as { produto_id: number; quantidade: number }[]
-
-    for (const item of itens) {
-      if (item.produto_id) {
-        await db.run(`UPDATE produtos SET estoque = estoque + ? WHERE id = ?`, [item.quantidade, item.produto_id])
-      }
+    const sessao = await getAuthApi().session()
+    if (!sessao) {
+      setMensagem('Sessão expirada. Faça login novamente.')
+      return
     }
-    await db.run(`UPDATE vendas SET status = 'cancelada', cancelada_em = datetime('now') WHERE id = ?`, [v.id])
-    await db.run(`UPDATE movimentacoes SET tipo = 'cancelamento' WHERE venda_id = ?`, [v.id])
-    setMensagem('Venda cancelada, estoque devolvido.')
-    setVendaPainelId(null)
-    carregar()
+    try {
+      // Cancelamento transacional no servidor: devolve estoque e ajusta o caixa
+      // (total_vendas/qtd_vendas/cancelamentos). Restrito a admin/gerente.
+      const res = await getVendasCancelApi().cancelar(v.id, sessao.id)
+      if (!res.ok) {
+        setMensagem(res.erro ?? 'Não foi possível cancelar a venda.')
+        return
+      }
+      setMensagem(`Venda ${res.numero} cancelada, estoque devolvido (${res.itens_devolvidos ?? 0} itens). Caixa ajustado.`)
+      setVendaPainelId(null)
+      carregar()
+    } catch (err) {
+      setMensagem(`Erro ao cancelar: ${(err as Error).message}`)
+    }
   }
 
   useEffect(() => {

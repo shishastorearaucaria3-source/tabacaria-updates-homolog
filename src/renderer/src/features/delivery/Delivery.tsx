@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { getDbApi, getCatalogoApi } from '../../shared/db'
+import { getDbApi, getCatalogoApi, getAuthApi, getPedidosCancelApi } from '../../shared/db'
 import EditarPedido from './EditarPedido'
 
 interface Pedido {
@@ -131,14 +131,34 @@ export default function Delivery() {
 
   const cancelar = async (p: Pedido) => {
     if (!confirm(`Cancelar o pedido ${p.numero}?`)) return
-    await getDbApi().run(`UPDATE pedidos SET status = 'cancelado' WHERE id = ?`, [p.id])
-    setMensagem(`Pedido ${p.numero} cancelado.`)
+    const sessao = await getAuthApi().session()
+    if (!sessao) {
+      setMensagem('Sessão expirada. Faça login novamente.')
+      return
+    }
+    // Transacional no servidor: se o pedido já tinha baixado estoque (aceito+),
+    // devolve e registra movimentação de reversão.
+    const res = await getPedidosCancelApi().cancelar(p.id, sessao.id)
+    if (!res.ok) {
+      setMensagem(res.erro ?? 'Não foi possível cancelar o pedido.')
+      return
+    }
+    setMensagem(`Pedido ${p.numero} cancelado.${res.estoque_devolvido ? ' Estoque devolvido.' : ''}`)
     carregar()
   }
 
   const recusar = async (p: Pedido) => {
     if (!confirm(`Recusar o pedido ${p.numero} do cliente ${p.cliente_nome}?`)) return
-    await getDbApi().run(`UPDATE pedidos SET status = 'cancelado' WHERE id = ?`, [p.id])
+    const sessao = await getAuthApi().session()
+    if (!sessao) {
+      setMensagem('Sessão expirada. Faça login novamente.')
+      return
+    }
+    const res = await getPedidosCancelApi().cancelar(p.id, sessao.id)
+    if (!res.ok) {
+      setMensagem(res.erro ?? 'Não foi possível recusar o pedido.')
+      return
+    }
     setMensagem(`Pedido ${p.numero} recusado.`)
     carregar()
   }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getDbApi } from '../../shared/db'
+import { getDbApi, getAuthApi, getPedidosCancelApi } from '../../shared/db'
 import Cupom from '../../shared/Cupom'
 
 interface Item {
@@ -86,8 +86,18 @@ export default function PainelPedido({
 
   const cancelar = async () => {
     if (!confirm(`Cancelar o pedido ${pedido.numero}?`)) return
-    await getDbApi().run(`UPDATE pedidos SET status = 'cancelado' WHERE id = ?`, [pedido.id])
-    setMensagem(`Pedido ${pedido.numero} cancelado.`)
+    const sessao = await getAuthApi().session()
+    if (!sessao) {
+      setMensagem('Sessão expirada. Faça login novamente.')
+      return
+    }
+    // Transacional no servidor — devolve estoque se o pedido já tinha baixado.
+    const res = await getPedidosCancelApi().cancelar(pedido.id, sessao.id)
+    if (!res.ok) {
+      setMensagem(res.erro ?? 'Não foi possível cancelar o pedido.')
+      return
+    }
+    setMensagem(`Pedido ${pedido.numero} cancelado.${res.estoque_devolvido ? ' Estoque devolvido.' : ''}`)
     setTimeout(onFechar, 400)
   }
 

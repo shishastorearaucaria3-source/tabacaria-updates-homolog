@@ -5,7 +5,8 @@ const api = {
     all: (sql: string, params: unknown[] = []) => ipcRenderer.invoke('db:all', sql, params),
     get: (sql: string, params: unknown[] = []) => ipcRenderer.invoke('db:get', sql, params),
     run: (sql: string, params: unknown[] = []) => ipcRenderer.invoke('db:run', sql, params),
-    exec: (sql: string) => ipcRenderer.invoke('db:exec', sql)
+    exec: (sql: string) => ipcRenderer.invoke('db:exec', sql),
+    transacao: (statements: { sql: string; params?: unknown[] }[]) => ipcRenderer.invoke('db:transacao', statements)
   },
   auth: {
     login: (login: string, senha: string) => ipcRenderer.invoke('auth:login', login, senha),
@@ -69,6 +70,13 @@ const api = {
     getExibicao: () => ipcRenderer.invoke('catalogo:getExibicao'),
     salvarExibicao: (dados: Record<string, unknown>) => ipcRenderer.invoke('catalogo:salvarExibicao', dados)
   },
+  vendas: {
+    cancelar: (vendaId: number, usuarioId: number) => ipcRenderer.invoke('vendas:cancelar', vendaId, usuarioId),
+    finalizar: (dados: Record<string, unknown>) => ipcRenderer.invoke('vendas:finalizar', dados)
+  },
+  pedidosApi: {
+    cancelar: (pedidoId: number, usuarioId: number) => ipcRenderer.invoke('pedidos:cancelar', pedidoId, usuarioId)
+  },
   servidor: {
     status: () => ipcRenderer.invoke('servidor:status'),
     logs: () => ipcRenderer.invoke('servidor:logs'),
@@ -79,8 +87,11 @@ const api = {
     zerar: (alvos: string[]) => ipcRenderer.invoke('servidor:zerar', alvos),
     restaurar: () => ipcRenderer.invoke('servidor:restaurar'),
     conexao: () => ipcRenderer.invoke('servidor:conexao'),
-    configurarConexao: (opcoes: { local?: boolean; ip?: string }) => ipcRenderer.invoke('servidor:configurarConexao', opcoes),
-    testar: () => ipcRenderer.invoke('servidor:testar')
+    configurarConexao: (opcoes: { local?: boolean; ip?: string; url?: string; apiKey?: string }) =>
+      ipcRenderer.invoke('servidor:configurarConexao', opcoes),
+    testar: () => ipcRenderer.invoke('servidor:testar'),
+    apiKeyGet: () => ipcRenderer.invoke('servidor:apiKeyGet'),
+    apiKeyRegenerar: () => ipcRenderer.invoke('servidor:apiKeyRegenerar')
   },
   estoque: {
     movimentar: (dados: Record<string, unknown>) => ipcRenderer.invoke('estoque:movimentar', dados),

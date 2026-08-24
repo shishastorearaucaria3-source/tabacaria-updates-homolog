@@ -1,8 +1,24 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { getDbApi } from '../../shared/db'
 
 export default function ConfigPdv({ onFechar }: { onFechar: () => void }) {
   const [agrupar, setAgrupar] = useState<boolean>(() => localStorage.getItem('pdv_agrupar_iguais') !== '0')
+  // Fonte oficial é a tabela config (o servidor aplica a regra na venda).
+  // O localStorage mantém apenas o valor para exibição imediata.
   const [permitirSemEstoque, setPermitirSemEstoque] = useState<boolean>(() => localStorage.getItem('pdv_permitir_sem_estoque') === '1')
+
+  useEffect(() => {
+    getDbApi()
+      .get(`SELECT valor FROM config WHERE chave = 'pdv_permitir_sem_estoque'`)
+      .then((row) => {
+        const v = (row as { valor?: string } | null)?.valor
+        if (v != null) {
+          setPermitirSemEstoque(v === '1')
+          try { localStorage.setItem('pdv_permitir_sem_estoque', v) } catch { /* ignore */ }
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   const toggleAgrupar = (v: boolean) => {
     setAgrupar(v)
@@ -12,6 +28,14 @@ export default function ConfigPdv({ onFechar }: { onFechar: () => void }) {
   const toggleSemEstoque = (v: boolean) => {
     setPermitirSemEstoque(v)
     try { localStorage.setItem('pdv_permitir_sem_estoque', v ? '1' : '0') } catch { /* ignore */ }
+    // Persiste na tabela config — o servidor lê este valor ao finalizar a venda.
+    getDbApi()
+      .run(
+        `INSERT INTO config (chave, valor) VALUES ('pdv_permitir_sem_estoque', ?)
+         ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor`,
+        [v ? '1' : '0']
+      )
+      .catch(() => {})
   }
 
   return (

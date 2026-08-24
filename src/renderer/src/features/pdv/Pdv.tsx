@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { getDbApi, getImagemApi } from '../../shared/db'
+import { getDbApi, getImagemApi, getVendasCancelApi } from '../../shared/db'
 import CampoDinheiro, { parseMoeda, formatarMoeda } from '../../shared/CampoDinheiro'
 import Cupom from '../../shared/Cupom'
 import ConfigPdv from './ConfigPdv'
@@ -749,44 +749,31 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
         setPosVenda({ numero, total: totalVenda, troco: trocoExibido })
         return
       }
-      const seq = (await getDbApi().get(
-        `UPDATE sequencias SET valor = valor + 1 WHERE chave = 'venda' RETURNING valor`
-      )) as { valor: number }
-      const numero = String(seq.valor)
-      const res = await getDbApi().run(
-        `INSERT INTO vendas (numero, tipo, subtotal, desconto, total, status, vendedor_id, caixa_id)
-         VALUES (?, 'balcao', ?, ?, ?, 'concluida', ?, ?)`,
-        [numero, subtotal, descontoValor, totalVenda, vendedorSelecionado?.id ?? usuarioId ?? null, caixaAberto?.id ?? null]
-      )
-      const vendaId = Number(res.lastInsertRowid)
-      for (const item of carrinho) {
-        await getDbApi().run(
-          `INSERT INTO venda_itens (venda_id, produto_id, nome_produto, quantidade, preco_unitario, subtotal, desconto, observacao)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          [vendaId, item.produto_id, item.nome, item.quantidade, item.preco_unitario, item.quantidade * item.preco_unitario, itemDescontoValor(item), item.observacao ?? null]
-        )
-        await getDbApi().run(
-          `UPDATE produtos SET estoque = estoque - ? WHERE id = ?`,
-          [item.quantidade, item.produto_id]
-        )
-        await getDbApi().run(
-          `INSERT INTO movimentacoes (produto_id, tipo, quantidade, motivo, venda_id)
-           VALUES (?, 'saida', ?, 'venda', ?)`,
-          [item.produto_id, item.quantidade, vendaId]
-        )
+      // Venda ATÔMICA no servidor: venda + itens + estoque + movimentações +
+      // pagamentos + caixa em uma única transação. Regras de estoque aplicadas
+      // server-side (config pdv_permitir_sem_estoque / permissão vender_sem_estoque).
+      const res = await getVendasCancelApi().finalizar({
+        itens: carrinho.map((item) => ({
+          produto_id: item.produto_id,
+          nome: item.nome,
+          quantidade: item.quantidade,
+          preco_unitario: item.preco_unitario,
+          desconto: itemDescontoValor(item),
+          observacao: item.observacao ?? null
+        })),
+        pagamentos: pagamentosFinais,
+        subtotal,
+        desconto: descontoValor,
+        total: totalVenda,
+        vendedor_id: vendedorSelecionado?.id ?? null,
+        caixa_id: caixaAberto?.id ?? null,
+        usuario_id: usuarioId ?? null
+      })
+      if (!res.ok) {
+        setMensagem(res.erro ?? 'Erro ao finalizar a venda.')
+        return
       }
-      for (const p of pagamentosFinais) {
-        await getDbApi().run(
-          `INSERT INTO pagamentos (venda_id, forma, valor) VALUES (?, ?, ?)`,
-          [vendaId, p.forma, p.valor]
-        )
-      }
-      if (caixaAberto) {
-        await getDbApi().run(
-          `UPDATE caixas SET total_vendas = total_vendas + ?, qtd_vendas = qtd_vendas + 1 WHERE id = ?`,
-          [totalVenda, caixaAberto.id]
-        )
-      }
+      const numero = res.numero
       const trocoExibido = troco
       const itensVenda = carrinho
       const pagVenda = pagamentosFinais

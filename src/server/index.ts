@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite'
-import { createHash } from 'node:crypto'
-import { join } from 'node:path'
+import { createHash, randomBytes } from 'node:crypto'
+import { join, resolve, sep } from 'node:path'
 import { mkdirSync, existsSync, copyFileSync, readdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import express from 'express'
 import { createServer } from 'node:http'
@@ -12,6 +12,7 @@ import { getConfig, salvarConfig, getStatus, sincronizarAgora, testarConexao, te
 import { getStatusServidor, getLogs, limparLogs, getBackupInfo, diagnosticar, corrigir, zerarDados, restaurarBackup, registrarLog, versaoSistema } from './servidor'
 import { extrairZip, listarArquivosImportacao, lerArquivoImportacao, importarProdutos, limparPastaImportacao, getProgressoImportacao } from './importar'
 import { importarNex, getProgressoNex, analisarNex } from './importar-nex'
+import bcrypt from 'bcryptjs'
 
 function notificarProdutoSeNecessario(sql: string, params: unknown[]): void {
   try {
@@ -55,6 +56,8 @@ export function reabrirBanco(): DatabaseSync {
   db = new DatabaseSync(path)
   db.exec('PRAGMA journal_mode = WAL;')
   db.exec('PRAGMA foreign_keys = ON;')
+  // Espera até 5s por lock em vez de falhar imediato (multi-PDV na mesma rede).
+  db.exec('PRAGMA busy_timeout = 5000;')
   migrate(db)
   return db
 }
@@ -66,6 +69,8 @@ export function initDb(path = getDefaultDbPath()): DatabaseSync {
   db = new DatabaseSync(path)
   db.exec('PRAGMA journal_mode = WAL;')
   db.exec('PRAGMA foreign_keys = ON;')
+  // Espera até 5s por lock em vez de falhar imediato (multi-PDV na mesma rede).
+  db.exec('PRAGMA busy_timeout = 5000;')
   migrate(db)
   return db
 }
@@ -90,18 +95,39 @@ function migrate(database: DatabaseSync): void {
   }
 }
 
+// Legado (somente para validar hashes antigos e migrar no primeiro login).
 export function hashSenha(senha: string): string {
   return createHash('sha256').update(senha).digest('hex')
 }
 
+const BCRYPT_ROUNDS = 10
+
+export function hashSenhaForte(senha: string): string {
+  return bcrypt.hashSync(senha, BCRYPT_ROUNDS)
+}
+
+// Valida a senha contra o hash gravado. Aceita bcrypt (novo) e sha256 (legado).
+// Quando o hash é legado e a senha confere, devolve upgraded=true para o chamador
+// persistir o hash forte — migração transparente, sem quebrar usuários existentes.
+export function verificarSenha(hashGravado: string, senha: string): { ok: boolean; upgraded?: string } {
+  if (hashGravado.startsWith('$2a$') || hashGravado.startsWith('$2b$')) {
+    const ok = bcrypt.compareSync(senha, hashGravado)
+    return { ok }
+  }
+  if (hashGravado === hashSenha(senha)) {
+    return { ok: true, upgraded: hashSenhaForte(senha) }
+  }
+  return { ok: false }
+}
+
 export function seed(database: DatabaseSync): void {
-  // Garantir que o usuário admin/admin123 sempre exista (idempotente)
-  const senha = hashSenha('admin123')
+  // Cria o admin padrão SOMENTE em banco novo. Nunca reseta senha/perfil/ativo
+  // de um admin existente — a senha escolhida pelo lojista sobrevive ao restart.
   const adminExiste = database.prepare('SELECT id FROM usuarios WHERE login = ?').get('admin') as { id: number } | undefined
-  if (adminExiste) {
-    database.prepare("UPDATE usuarios SET nome = 'Administrador', senha_hash = ?, perfil = 'admin', ativo = 1 WHERE login = 'admin'").run(senha)
-  } else {
-    database.prepare("INSERT INTO usuarios (nome, login, senha_hash, perfil, comissao_percent) VALUES (?, ?, ?, 'admin', 0)").run('Administrador', 'admin', senha)
+  if (!adminExiste) {
+    database
+      .prepare(`INSERT INTO usuarios (nome, login, senha_hash, perfil, comissao_percent) VALUES (?, ?, ?, 'admin', 0)`)
+      .run('Administrador', 'admin', hashSenhaForte('admin123'))
   }
   // Guarda por CATEGORIAS (não por contagem de usuários): bancos com um único
   // usuário voltavam a reinserir categorias no segundo boot e morriam com
@@ -148,6 +174,34 @@ export function fazerBackup(): { ok: boolean; arquivo: string } {
 
 let server: Server | null = null
 let portaAtual = 0
+
+// Chave de API exigida em requisições NÃO-loopback (outros PDVs da rede).
+// Loopback (o próprio aplicativo no servidor) tem acesso integral.
+let apiKeyAtual = ''
+
+function garantirApiKey(): string {
+  const row = getDb().prepare(`SELECT valor FROM config WHERE chave = 'api_key'`).get() as { valor: string } | undefined
+  if (row?.valor) {
+    apiKeyAtual = row.valor
+    return apiKeyAtual
+  }
+  apiKeyAtual = randomBytes(24).toString('hex')
+  getDb().prepare(`INSERT INTO config (chave, valor) VALUES ('api_key', ?)`).run(apiKeyAtual)
+  registrarLog('INFO', 'Chave de API gerada para acesso de outros terminais na rede.')
+  return apiKeyAtual
+}
+
+export function getApiKey(): string {
+  if (!apiKeyAtual) garantirApiKey()
+  return apiKeyAtual
+}
+
+export function regenerarApiKey(): string {
+  apiKeyAtual = randomBytes(24).toString('hex')
+  getDb().prepare(`INSERT INTO config (chave, valor) VALUES ('api_key', ?) ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor`).run(apiKeyAtual)
+  registrarLog('SUCCESS', 'Chave de API regenerada — terminais remotos precisam ser reconfigurados.')
+  return apiKeyAtual
+}
 
 export function getPorta(): number {
   return portaAtual
@@ -222,20 +276,48 @@ function lerPortaGravada(): number {
 
 export function iniciarServidor(porta = 3210): void {
   const database = getDb()
+  garantirApiKey()
   const app = express()
   app.use(express.json({ limit: '100mb' }))
 
   // Restringe acesso à rede local (e ao próprio computador). Conexões de fora da
   // subnet do servidor são bloqueadas — o servidor só é acessível dentro do roteador.
   const ipLocal = getIpRede()
+  const localReq = (req: express.Request): boolean => ehLoopback(req.socket.remoteAddress || '')
   app.use((req, res, next) => {
     const remote = (req.socket.remoteAddress || '').replace(/^::ffff:/, '')
-    if (ehLoopback(req.socket.remoteAddress || '') || remote === ipLocal || ehIpPrivado(remote) && mesmaSubnet(remote, ipLocal)) {
+    if (localReq(req) || remote === ipLocal || ehIpPrivado(remote) && mesmaSubnet(remote, ipLocal)) {
       next()
       return
     }
     res.status(403).json({ erro: 'Acesso permitido apenas na rede local.' })
   })
+
+  // Ping público (dentro da LAN) — permite testar conexão ANTES de configurar a chave.
+  app.get('/api/ping', (_req, res) => {
+    res.json({ ok: true })
+  })
+
+  // Autenticação: loopback (aplicativo no próprio servidor) tem acesso integral;
+  // qualquer outro terminal da rede precisa apresentar a chave de API.
+  // Override de TESTE (TABACARIA_TEST_FORCE_REMOTE=1): trata toda requisição
+  // como remota para exercitar o fluxo de autenticação deterministicamente.
+  const forcarRemoto = process.env.TABACARIA_TEST_FORCE_REMOTE === '1'
+  const ehLocalEfetivo = (req: express.Request): boolean => !forcarRemoto && localReq(req)
+  app.use((req, res, next) => {
+    if (ehLocalEfetivo(req)) { next(); return }
+    const chave = String(req.get('x-api-key') || '')
+    if (chave && chave === apiKeyAtual) { next(); return }
+    registrarLog('WARNING', `Requisição sem chave válida bloqueada: ${req.method} ${req.path} de ${req.socket.remoteAddress}`)
+    res.status(401).json({ erro: 'Chave de API inválida ou ausente. Configure a chave deste terminal na tela do servidor.' })
+  })
+
+  // Rotas administrativas/destrutivas: SOMENTE execução local (no servidor).
+  // Terminais remotos nunca podem zerar dados, restaurar backup ou gerenciar usuários.
+  const somenteLocal = (req: express.Request, res: express.Response, next: express.NextFunction): void => {
+    if (ehLocalEfetivo(req)) { next(); return }
+    res.status(403).json({ erro: 'Esta operação só pode ser executada no computador do servidor.' })
+  }
 
   app.post('/api/db/all', (req, res) => {
     const { sql, params } = req.body ?? {}
@@ -282,7 +364,8 @@ export function iniciarServidor(porta = 3210): void {
     }
   })
 
-  app.post('/api/db/exec', (req, res) => {
+  // Multi-statement: PERIGOSO por natureza — aceito apenas do próprio servidor.
+  app.post('/api/db/exec', somenteLocal, (req, res) => {
     const { sql } = req.body ?? {}
     if (typeof sql !== 'string') {
       res.status(400).json({ erro: 'sql obrigatório' })
@@ -296,6 +379,40 @@ export function iniciarServidor(porta = 3210): void {
     }
   })
 
+  // Lote transacional: executa N statements em BEGIN IMMEDIATE…COMMIT.
+  // Qualquer falha reverte TUDO e devolve o índice do statement que falhou —
+  // garante que operações compostas (venda, cancelamento) nunca fiquem pela metade.
+  app.post('/api/db/transacao', (req, res) => {
+    const { statements } = req.body ?? {}
+    if (!Array.isArray(statements) || statements.length === 0) {
+      res.status(400).json({ ok: false, erro: 'Informe statements.' })
+      return
+    }
+    if (statements.length > 5000) {
+      res.status(400).json({ ok: false, erro: 'Máximo de 5000 statements por transação.' })
+      return
+    }
+    const resultados: { changes: number; lastInsertRowid: number }[] = []
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      for (let i = 0; i < statements.length; i++) {
+        const st = statements[i]
+        const sql = typeof st?.sql === 'string' ? st.sql : ''
+        const params = Array.isArray(st?.params) ? st.params : []
+        if (!sql) throw new Error(`Statement ${i}: sql obrigatório`)
+        const r = database.prepare(sql).run(...params)
+        notificarProdutoSeNecessario(sql, params)
+        resultados.push({ changes: Number(r.changes), lastInsertRowid: Number(r.lastInsertRowid) })
+      }
+      database.exec('COMMIT')
+      res.json({ ok: true, resultados })
+    } catch (err) {
+      database.exec('ROLLBACK')
+      registrarLog('ERROR', `Transação revertida no statement ${resultados.length}: ${(err as Error).message}`)
+      res.status(400).json({ ok: false, indice: resultados.length, erro: (err as Error).message })
+    }
+  })
+
   app.post('/api/auth/login', (req, res) => {
     const { login, senha } = req.body ?? {}
     const user = database
@@ -306,33 +423,40 @@ export function iniciarServidor(porta = 3210): void {
       return
     }
     const row = database.prepare(`SELECT senha_hash FROM usuarios WHERE id = ?`).get(user.id) as { senha_hash: string }
-    if (row.senha_hash !== hashSenha(senha ?? '')) {
+    const ver = verificarSenha(row.senha_hash, String(senha ?? ''))
+    if (!ver.ok) {
       res.json({ ok: false, erro: 'Senha incorreta' })
       return
+    }
+    // Migração transparente sha256 → bcrypt no primeiro login bem-sucedido.
+    if (ver.upgraded) {
+      try {
+        database.prepare(`UPDATE usuarios SET senha_hash = ? WHERE id = ?`).run(ver.upgraded, user.id)
+      } catch { /* ignore — migração é best-effort */ }
     }
     res.json({ ok: true, usuario: user })
   })
 
-  app.post('/api/auth/criarUsuario', (req, res) => {
+  app.post('/api/auth/criarUsuario', somenteLocal, (req, res) => {
     const dados = req.body ?? {}
-    const hash = hashSenha(String(dados.senha ?? ''))
+    const hash = hashSenhaForte(String(dados.senha ?? ''))
     const result = database
       .prepare(`INSERT INTO usuarios (nome, login, senha_hash, perfil, comissao_percent) VALUES (?, ?, ?, ?, ?)`)
       .run(String(dados.nome), String(dados.login), hash, String(dados.perfil), Number(dados.comissao) || 0)
     res.json({ ok: true, id: Number(result.lastInsertRowid) })
   })
 
-  app.post('/api/auth/alterarSenha', (req, res) => {
+  app.post('/api/auth/alterarSenha', somenteLocal, (req, res) => {
     const { usuarioId, novaSenha } = req.body ?? {}
-    const hash = hashSenha(String(novaSenha ?? ''))
+    const hash = hashSenhaForte(String(novaSenha ?? ''))
     database.prepare(`UPDATE usuarios SET senha_hash = ? WHERE id = ?`).run(hash, Number(usuarioId))
     res.json({ ok: true })
   })
 
-  app.post('/api/auth/atualizarUsuario', (req, res) => {
+  app.post('/api/auth/atualizarUsuario', somenteLocal, (req, res) => {
     const { usuarioId, nome, login, perfil, comissao, senha } = req.body ?? {}
     if (senha) {
-      const hash = hashSenha(String(senha))
+      const hash = hashSenhaForte(String(senha))
       database
         .prepare(`UPDATE usuarios SET nome = ?, login = ?, perfil = ?, comissao_percent = ?, senha_hash = ? WHERE id = ?`)
         .run(String(nome), String(login), String(perfil), Number(comissao) || 0, hash, Number(usuarioId))
@@ -440,7 +564,7 @@ export function iniciarServidor(porta = 3210): void {
     res.json(getStatus())
   })
 
-  app.post('/api/catalogo/config', (req, res) => {
+  app.post('/api/catalogo/config', somenteLocal, (req, res) => {
     const { github_token, github_repo, github_branch, site_url, nome_loja } = req.body ?? {}
     // Se o token vier mascarado (••••••) ou vazio, preserva o token atual (não sobrescreve)
     let token: string | undefined
@@ -471,7 +595,7 @@ export function iniciarServidor(porta = 3210): void {
     res.json(await testarConexao())
   })
 
-  app.post('/api/catalogo/backup-config', (_req, res) => {
+  app.post('/api/catalogo/backup-config', somenteLocal, (_req, res) => {
     const r = backupConfigCatalogo()
     if (r.ok) {
       registrarLog('SUCCESS', `Backup da configuração do catálogo salvo em ${r.arquivo}`)
@@ -485,7 +609,7 @@ export function iniciarServidor(porta = 3210): void {
     res.json(getBackupConfigCatalogo())
   })
 
-  app.post('/api/catalogo/restaurar-backup-config', (_req, res) => {
+  app.post('/api/catalogo/restaurar-backup-config', somenteLocal, (_req, res) => {
     const r = restaurarBackupConfigCatalogo()
     if (r.ok) {
       registrarLog('SUCCESS', 'Configuração do catálogo restaurada do backup')
@@ -523,7 +647,7 @@ export function iniciarServidor(porta = 3210): void {
     res.json({ ok: true, logs: getLogs() })
   })
 
-  app.post('/api/servidor/logs/limpar', (_req, res) => {
+  app.post('/api/servidor/logs/limpar', somenteLocal, (_req, res) => {
     limparLogs()
     res.json({ ok: true })
   })
@@ -536,36 +660,63 @@ export function iniciarServidor(porta = 3210): void {
     res.json(diagnosticar())
   })
 
-  app.post('/api/servidor/corrigir', (_req, res) => {
+  app.post('/api/servidor/corrigir', somenteLocal, (_req, res) => {
     const r = corrigir()
     res.json({ ok: r.ok, correcoes: r.correcoes })
   })
 
-  app.post('/api/servidor/zerar', (req, res) => {
-    const { alvos } = req.body ?? {}
+  // Chave de API: exibição/regeneração SOMENTE no computador do servidor.
+  app.get('/api/servidor/apikey', somenteLocal, (_req, res) => {
+    res.json({ ok: true, api_key: getApiKey() })
+  })
+
+  app.post('/api/servidor/apikey/regenerar', somenteLocal, (_req, res) => {
+    res.json({ ok: true, api_key: regenerarApiKey() })
+  })
+
+  app.post('/api/servidor/zerar', somenteLocal, (req, res) => {
+    const { alvos, confirmar } = req.body ?? {}
+    if (confirmar !== true) {
+      res.status(400).json({ ok: false, erro: 'Confirmação explícita obrigatória (confirmar: true).' })
+      return
+    }
     if (!Array.isArray(alvos) || alvos.length === 0) {
       res.status(400).json({ ok: false, erro: 'Selecione ao menos um alvo para zerar.' })
       return
     }
     const r = zerarDados(alvos)
+    registrarLog('WARNING', `ZERAR executado. Alvos: ${alvos.join(', ')}. Removidos: ${(r.removidos ?? []).join(', ')}`)
     res.json(r)
   })
 
-  app.post('/api/servidor/restaurar', (req, res) => {
+  app.post('/api/servidor/restaurar', somenteLocal, (req, res) => {
     const { arquivo } = req.body ?? {}
     if (typeof arquivo !== 'string' || !arquivo) {
       res.status(400).json({ ok: false, erro: 'Arquivo de backup obrigatório.' })
       return
     }
-    const r = restaurarBackup(arquivo)
+    // Segurança: só aceita arquivos DENTRO da pasta de backups do sistema
+    // (bloqueia caminho arbitrário/traversal que sobrescreveria o banco com qualquer .sqlite).
+    const alvo = resolve(arquivo)
+    const base = resolve(backupDir())
+    if (!alvo.startsWith(base + sep)) {
+      res.status(400).json({ ok: false, erro: `Restauração permitida apenas com arquivos da pasta de backups (${base}).` })
+      return
+    }
+    if (!existsSync(alvo)) {
+      res.status(400).json({ ok: false, erro: 'Arquivo de backup não encontrado.' })
+      return
+    }
+    const r = restaurarBackup(alvo)
     if (r.ok) {
+      registrarLog('WARNING', `Banco restaurado do backup ${alvo}`)
       res.json({ ok: true })
     } else {
       res.status(400).json({ ok: false, erro: r.erro })
     }
   })
 
-  app.post('/api/servidor/encerrar', (_req, res) => {
+  app.post('/api/servidor/encerrar', somenteLocal, (_req, res) => {
     res.json({ ok: true })
     setTimeout(() => {
       try { process.exit(0) } catch { /* ignore */ }
@@ -675,6 +826,21 @@ export function iniciarServidor(porta = 3210): void {
 
     let total = 0
     let aplicados = 0
+    // Saída nunca deixa estoque negativo (a menos que force=true — uso interno
+    // do sistema, ex.: inventário). Valida ANTES de aplicar e devolve a lista.
+    const semSaldo: string[] = []
+    if (tipo === 'saida' && corpo.force !== true) {
+      for (const [pid, linha] of linhas) {
+        const p = produtoParaMovimento(pid)!
+        if (p.controla_estoque === 1 && p.estoque < linha.quantidade) {
+          semSaldo.push(`${p.id} (${p.estoque} em estoque, pedido ${linha.quantidade})`)
+        }
+      }
+      if (semSaldo.length > 0) {
+        res.status(400).json({ ok: false, erro: `Estoque insuficiente para: ${semSaldo.join('; ')}.`, produtos_sem_saldo: semSaldo })
+        return
+      }
+    }
     database.exec('BEGIN')
     try {
       for (const [pid, linha] of linhas) {
@@ -847,6 +1013,245 @@ export function iniciarServidor(porta = 3210): void {
     res.json({ ok: true })
   })
 
+  // ---------- Finalização de venda (transacional, com regras de estoque) ----------
+  app.post('/api/vendas/finalizar', (req, res) => {
+    const corpo = req.body ?? {}
+    const itens = corpo.itens
+    const pagamentos = corpo.pagamentos
+    const subtotal = Number(corpo.subtotal ?? 0)
+    const desconto = Number(corpo.desconto ?? 0)
+    const total = Number(corpo.total ?? 0)
+    if (!Array.isArray(itens) || itens.length === 0) {
+      res.status(400).json({ ok: false, erro: 'Informe ao menos um item.' })
+      return
+    }
+    if (!Number.isFinite(total) || total < 0) {
+      res.status(400).json({ ok: false, erro: 'Total inválido.' })
+      return
+    }
+    const usuarioId = corpo.usuario_id != null ? Number(corpo.usuario_id) : null
+
+    // Regra de estoque: bloqueia venda sem saldo, SALVO se a configuração da loja
+    // permitir ou o operador tiver a permissão específica.
+    let permitirSemEstoque = false
+    try {
+      const cfgRow = database.prepare(`SELECT valor FROM config WHERE chave = 'pdv_permitir_sem_estoque'`).get() as { valor: string } | undefined
+      if ((cfgRow?.valor ?? '0') === '1') permitirSemEstoque = true
+    } catch { /* ignore */ }
+    if (!permitirSemEstoque && usuarioId != null) {
+      const perm = database
+        .prepare(`SELECT 1 AS ok FROM permissoes WHERE usuario_id = ? AND modulo = 'vender_sem_estoque'`)
+        .get(usuarioId)
+      if (perm) permitirSemEstoque = true
+    }
+
+    // Caixa informado precisa existir e estar aberto.
+    let caixaId: number | null = null
+    if (corpo.caixa_id != null) {
+      const cx = Number(corpo.caixa_id)
+      const cxRow = database.prepare(`SELECT id FROM caixas WHERE id = ? AND aberto = 1`).get(cx) as { id: number } | undefined
+      if (!cxRow) {
+        res.status(400).json({ ok: false, erro: 'Caixa não encontrado ou fechado.' })
+        return
+      }
+      caixaId = cx
+    }
+
+    // Número da venda fora da transação (sequência própria é atômica por UPDATE).
+    let numero = ''
+    try {
+      const seq = database.prepare(`UPDATE sequencias SET valor = valor + 1 WHERE chave = 'venda' RETURNING valor`).get() as { valor: number }
+      numero = String(seq.valor)
+    } catch {
+      // sequência ausente (banco antigo): cria na hora
+      database.prepare(`INSERT INTO sequencias (chave, valor) VALUES ('venda', 56781) ON CONFLICT(chave) DO NOTHING`).run()
+      const seq = database.prepare(`UPDATE sequencias SET valor = valor + 1 WHERE chave = 'venda' RETURNING valor`).get() as { valor: number }
+      numero = String(seq.valor)
+    }
+
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const vendaId = Number(
+        database
+          .prepare(`INSERT INTO vendas (numero, tipo, subtotal, desconto, total, status, vendedor_id, caixa_id) VALUES (?, 'balcao', ?, ?, ?, 'concluida', ?, ?)`)
+          .run(numero, subtotal, desconto, total, corpo.vendedor_id != null ? Number(corpo.vendedor_id) : null, caixaId).lastInsertRowid
+      )
+      const insItem = database.prepare(
+        `INSERT INTO venda_itens (venda_id, produto_id, nome_produto, quantidade, preco_unitario, subtotal, desconto, observacao)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      const baixa = database.prepare(`UPDATE produtos SET estoque = estoque - ? WHERE id = ?`)
+      const insMov = database.prepare(
+        `INSERT INTO movimentacoes (produto_id, tipo, quantidade, motivo, venda_id) VALUES (?, 'saida', ?, 'venda', ?)`
+      )
+      for (const item of itens) {
+        const pid = Number(item?.produto_id)
+        const qtd = Number(item?.quantidade)
+        if (!Number.isInteger(pid) || pid <= 0 || !(qtd > 0)) {
+          throw new Error('Item inválido no carrinho.')
+        }
+        insItem.run(vendaId, pid, String(item.nome ?? ''), qtd, Number(item.preco_unitario ?? 0), qtd * Number(item.preco_unitario ?? 0), Number(item.desconto ?? 0), item.observacao ? String(item.observacao) : null)
+        const p = database.prepare(`SELECT controla_estoque, estoque, nome FROM produtos WHERE id = ?`).get(pid) as
+          | { controla_estoque: number; estoque: number; nome: string }
+          | undefined
+        if (p && p.controla_estoque === 1) {
+          if (p.estoque < qtd && !permitirSemEstoque) {
+            const e = new Error(`Estoque insuficiente para "${p.nome}" (disponível ${p.estoque}, pedido ${qtd}).`) as Error & { codigo?: string }
+            e.codigo = 'ESTOQUE_INSUFICIENTE'
+            throw e
+          }
+          baixa.run(qtd, pid)
+          insMov.run(pid, qtd, vendaId)
+        }
+      }
+      const insPag = database.prepare(`INSERT INTO pagamentos (venda_id, forma, valor) VALUES (?, ?, ?)`)
+      if (Array.isArray(pagamentos)) {
+        for (const pg of pagamentos) {
+          const valor = Number(pg?.valor ?? 0)
+          if (!(valor > 0)) continue
+          insPag.run(vendaId, String(pg.forma ?? ''), valor)
+        }
+      }
+      if (caixaId != null) {
+        database.prepare(`UPDATE caixas SET total_vendas = total_vendas + ?, qtd_vendas = qtd_vendas + 1 WHERE id = ?`).run(total, caixaId)
+      }
+      database.exec('COMMIT')
+      res.json({ ok: true, numero, venda_id: vendaId })
+    } catch (err) {
+      database.exec('ROLLBACK')
+      const e = err as Error & { codigo?: string }
+      registrarLog('ERROR', `Vendas/finalizar: ${e.message}`)
+      res.status(e.codigo === 'ESTOQUE_INSUFICIENTE' ? 400 : 500).json({ ok: false, erro: e.message, codigo: e.codigo })
+    }
+  })
+
+  // ---------- Cancelamentos (transacionais, com autorização) ----------
+
+  app.post('/api/vendas/cancelar', (req, res) => {
+    const { venda_id, usuario_id } = req.body ?? {}
+    const vid = Number(venda_id)
+    if (!Number.isInteger(vid) || vid <= 0) {
+      res.status(400).json({ ok: false, erro: 'venda_id obrigatório.' })
+      return
+    }
+    const u = database.prepare(`SELECT id, nome, perfil FROM usuarios WHERE id = ? AND ativo = 1`).get(Number(usuario_id)) as
+      | { id: number; nome: string; perfil: string }
+      | undefined
+    if (!u || (u.perfil !== 'admin' && u.perfil !== 'gerente')) {
+      res.status(403).json({ ok: false, erro: 'Somente administrador ou gerente pode cancelar vendas.' })
+      return
+    }
+    const venda = database.prepare(`SELECT id, numero, total, status, caixa_id FROM vendas WHERE id = ?`).get(vid) as
+      | { id: number; numero: string; total: number; status: string; caixa_id: number | null }
+      | undefined
+    if (!venda) {
+      res.status(400).json({ ok: false, erro: 'Venda não encontrada.' })
+      return
+    }
+    if (venda.status !== 'concluida') {
+      res.status(400).json({ ok: false, erro: `Venda ${venda.numero} não está concluída (status atual: ${venda.status}).` })
+      return
+    }
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      const itens = database
+        .prepare(
+          `SELECT vi.produto_id, vi.quantidade FROM venda_itens vi
+           JOIN produtos p ON p.id = vi.produto_id
+           WHERE vi.venda_id = ? AND vi.produto_id IS NOT NULL AND p.controla_estoque = 1`
+        )
+        .all(vid) as { produto_id: number; quantidade: number }[]
+      const devolve = database.prepare(`UPDATE produtos SET estoque = estoque + ? WHERE id = ?`)
+      for (const it of itens) devolve.run(it.quantidade, it.produto_id)
+
+      database.prepare(`UPDATE movimentacoes SET tipo = 'cancelamento' WHERE venda_id = ?`).run(vid)
+
+      if (venda.caixa_id != null) {
+        database
+          .prepare(
+            `UPDATE caixas SET total_vendas = MAX(0, total_vendas - ?), qtd_vendas = MAX(0, qtd_vendas - 1), cancelamentos = cancelamentos + ? WHERE id = ?`
+          )
+          .run(venda.total, venda.total, venda.caixa_id)
+      }
+
+      database.prepare(`UPDATE vendas SET status = 'cancelada', cancelada_em = datetime('now') WHERE id = ?`).run(vid)
+      database.exec('COMMIT')
+      registrarLog('WARNING', `Venda ${venda.numero} cancelada por ${u.nome}. Caixa ajustado.`)
+      res.json({ ok: true, numero: venda.numero, itens_devolvidos: itens.length })
+    } catch (err) {
+      database.exec('ROLLBACK')
+      registrarLog('ERROR', `Cancelar venda ${vid}: ${(err as Error).message}`)
+      res.status(500).json({ ok: false, erro: (err as Error).message })
+    }
+  })
+
+  app.post('/api/pedidos/cancelar', (req, res) => {
+    const { pedido_id, usuario_id } = req.body ?? {}
+    const pid = Number(pedido_id)
+    if (!Number.isInteger(pid) || pid <= 0) {
+      res.status(400).json({ ok: false, erro: 'pedido_id obrigatório.' })
+      return
+    }
+    const u = database.prepare(`SELECT id, nome, perfil FROM usuarios WHERE id = ? AND ativo = 1`).get(Number(usuario_id)) as
+      | { id: number; nome: string; perfil: string }
+      | undefined
+    if (!u || (u.perfil !== 'admin' && u.perfil !== 'gerente')) {
+      res.status(403).json({ ok: false, erro: 'Somente administrador ou gerente pode cancelar pedidos.' })
+      return
+    }
+    const pedido = database.prepare(`SELECT id, numero, status FROM pedidos WHERE id = ?`).get(pid) as
+      | { id: number; numero: string; status: string }
+      | undefined
+    if (!pedido) {
+      res.status(400).json({ ok: false, erro: 'Pedido não encontrado.' })
+      return
+    }
+    if (pedido.status === 'cancelado') {
+      res.status(400).json({ ok: false, erro: 'Pedido já está cancelado.' })
+      return
+    }
+    if (pedido.status === 'entregue') {
+      res.status(400).json({ ok: false, erro: 'Pedido já entregue — use troca/devolução, não cancelamento.' })
+      return
+    }
+    // Estoque só foi debitado quando o pedido passou de 'novo' (novo→aceito).
+    const estoqueDebitado = pedido.status !== 'novo'
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      if (estoqueDebitado) {
+        const itens = database
+          .prepare(
+            `SELECT pi.produto_id, pi.quantidade FROM pedido_itens pi
+             JOIN produtos p ON p.id = pi.produto_id
+             WHERE pi.pedido_id = ? AND pi.produto_id IS NOT NULL AND p.controla_estoque = 1`
+          )
+          .all(pid) as { produto_id: number; quantidade: number }[]
+        const devolve = database.prepare(`UPDATE produtos SET estoque = estoque + ? WHERE id = ?`)
+        const insMov = database.prepare(
+          `INSERT INTO movimentacoes (produto_id, tipo, categoria, quantidade, motivo, documento, usuario_id, criado_em)
+           VALUES (?, 'entrada', 'outras_entradas', ?, ?, ?, ?, ?)`
+        )
+        const documento = `PC-${pedido.numero}`
+        for (const it of itens) {
+          devolve.run(it.quantidade, it.produto_id)
+          insMov.run(
+            it.produto_id, it.quantidade,
+            `Cancelamento do pedido ${pedido.numero}`,
+            documento, u.id, new Date().toISOString()
+          )
+        }
+      }
+      database.prepare(`UPDATE pedidos SET status = 'cancelado' WHERE id = ?`).run(pid)
+      database.exec('COMMIT')
+      registrarLog('WARNING', `Pedido ${pedido.numero} cancelado por ${u.nome}${estoqueDebitado ? ' — estoque devolvido.' : '.'}`)
+      res.json({ ok: true, estoque_devolvido: estoqueDebitado })
+    } catch (err) {
+      database.exec('ROLLBACK')
+      registrarLog('ERROR', `Cancelar pedido ${pid}: ${(err as Error).message}`)
+      res.status(500).json({ ok: false, erro: (err as Error).message })
+    }
+  })
+
   // ---------- Importação via ZIP ----------
   app.post('/api/importar/zip', express.raw({ type: 'application/octet-stream', limit: '600mb' }), async (req, res) => {
     const nome = (() => {
@@ -956,6 +1361,7 @@ export function iniciarServidor(porta = 3210): void {
       registrarLog('SUCCESS', `API iniciada em http://${ip}:${p}`)
       console.log(`[servidor] API em http://${ip}:${p} (local: http://localhost:${p})`)
       dispararSyncAutomatica()
+      agendarBackupAutomatico()
     })
   }
 
@@ -965,6 +1371,33 @@ export function iniciarServidor(porta = 3210): void {
 }
 
 let syncJaDisparada = false
+
+// Backup automático: primeiro em ~2 min de uptime, depois a cada 4 horas.
+// Usa a mesma rotina/retenção do backup manual (MAX_BACKUPS=30).
+let backupAgendado = false
+function agendarBackupAutomatico(): void {
+  if (backupAgendado) return
+  backupAgendado = true
+  const INTERVALO_MS = 4 * 60 * 60 * 1000
+  setTimeout(() => {
+    try {
+      const r = fazerBackup()
+      if (r.ok) registrarLog('SUCCESS', `Backup automático realizado: ${r.arquivo}`)
+      else registrarLog('ERROR', `Backup automático falhou: ${r.arquivo}`)
+    } catch (err) {
+      console.error('[servidor] Erro no backup automático:', (err as Error).message)
+    }
+  }, 2 * 60 * 1000)
+  setInterval(() => {
+    try {
+      const r = fazerBackup()
+      if (r.ok) registrarLog('SUCCESS', `Backup automático realizado: ${r.arquivo}`)
+      else registrarLog('ERROR', `Backup automático falhou: ${r.arquivo}`)
+    } catch (err) {
+      console.error('[servidor] Erro no backup automático:', (err as Error).message)
+    }
+  }, INTERVALO_MS)
+}
 
 async function dispararSyncAutomatica(): Promise<void> {
   if (syncJaDisparada) return
