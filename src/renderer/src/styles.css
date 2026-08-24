@@ -2918,14 +2918,6 @@ body {
   background: #f0f0f0;
 }
 
-.cat-plano {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: #555;
-  white-space: nowrap;
-}
 
 .cat-avatar {
   width: 36px;
@@ -3406,9 +3398,6 @@ body {
     flex-wrap: wrap;
     gap: 8px;
   }
-  .cat-plano {
-    display: none;
-  }
   .cat-campo-pesquisa {
     width: 100%;
   }
@@ -3493,14 +3482,6 @@ body {
   background: #f0f0f0;
 }
 
-.rp-plano {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: #555;
-  white-space: nowrap;
-}
 
 .rp-avatar {
   width: 36px;
@@ -4119,9 +4100,6 @@ body {
     justify-content: flex-start;
     flex-wrap: wrap;
     gap: 8px;
-  }
-  .rp-plano {
-    display: none;
   }
   .rp-filtros {
     flex-direction: column;
@@ -7010,27 +6988,6 @@ textarea {
 .srv-update-disponivel li { margin: 2px 0; }
 
 /* ============ Estoque ============ */
-.est-plano {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  border: 1px solid #dbeafe;
-  background: #eff6ff;
-  color: #1d4ed8;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 700;
-  white-space: nowrap;
-}
-.est-plano::before {
-  content: '';
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #2563eb;
-}
-
 .est-abas {
   display: flex;
   gap: 4px;

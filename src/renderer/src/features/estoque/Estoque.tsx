@@ -152,9 +152,7 @@ export default function Estoque({
     <div className="page">
       <div className="page-header">
         <h2>Estoque</h2>
-        <div className="page-acoes">
-          <span className="est-plano" title="Plano atual">Plano Premium</span>
-        </div>
+        <div className="page-acoes" />
       </div>
 
       <div className="est-abas">

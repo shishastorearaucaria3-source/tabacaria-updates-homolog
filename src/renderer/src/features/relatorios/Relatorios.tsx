@@ -6,10 +6,10 @@ import ReportFilters, { FiltrosRelatorio } from './components/ReportFilters'
 import MetricCard from './components/MetricCard'
 import SalesChart from './components/SalesChart'
 import ReportTable from './components/ReportTable'
+import { calcularPeriodo } from './periodo'
 import {
   Metrica,
   reportFilters,
-  periodoWhere,
   carregarMetricas,
   carregarVendasPorHora,
   carregarMeiosPagamento,
@@ -67,10 +67,14 @@ export default function Relatorios({
   const [relatorio, setRelatorio] = useState('vendas-comissao-vendedor')
   const [metrica, setMetrica] = useState<Metrica>('faturamento')
   const [filtros, setFiltros] = useState<FiltrosRelatorio>({
-    data: reportFilters.datas[0],
+    chave: 'ultimos_30',
+    ini: '',
+    fim: '',
     tipoData: reportFilters.tiposData[0],
     hora: 'Todas'
   })
+  // Período Personalizado só carrega com as duas datas preenchidas.
+  const personalizadoIncompleto = filtros.chave === 'personalizado' && (!filtros.ini || !filtros.fim)
 
   const [metrics, setMetrics] = useState({ faturamento: 0, quantidade: 0, ticket: 0, lucro: 0 })
   const [chart, setChart] = useState<Awaited<ReturnType<typeof carregarVendasPorHora>>>([])
@@ -94,7 +98,10 @@ export default function Relatorios({
 
   useEffect(() => {
     const carregar = async () => {
-      const where = periodoWhere(filtros.data)
+      // Período único calculado pelo utilitário central (horário LOCAL → UTC
+      // na cláusula parametrizada). Todos os relatórios usam a mesma regra.
+      if (personalizadoIncompleto) return
+      const p = calcularPeriodo(filtros.chave, { ini: filtros.ini || undefined, fim: filtros.fim || undefined })
       if (relatorio === 'caixa-atual') {
         setCaixaAtual(await carregarCaixaAtual())
         return
@@ -104,7 +111,7 @@ export default function Relatorios({
         return
       }
       if (relatorio === 'estoque-produto-vendido') {
-        setEstoqueVendido(await carregarEstoqueProdutoVendido(where))
+        setEstoqueVendido(await carregarEstoqueProdutoVendido(p))
         return
       }
       if (relatorio === 'fornecedor-produto') {
@@ -112,35 +119,35 @@ export default function Relatorios({
         return
       }
       if (relatorio === 'fornecedor-vendas-analitico') {
-        setVendasAnalitico(await carregarVendasAnalitico(where))
+        setVendasAnalitico(await carregarVendasAnalitico(p))
         return
       }
       if (relatorio === 'fornecedor-vendas-sintetico' || relatorio === 'fornecedor-sintetico') {
-        setVendasSintetico(await carregarVendasSintetico(where))
+        setVendasSintetico(await carregarVendasSintetico(p))
         return
       }
       if (relatorio === 'vendas-categoria-produto') {
-        setPorCategoria(await carregarPorCategoriaProduto(where))
+        setPorCategoria(await carregarPorCategoriaProduto(p))
         return
       }
       if (relatorio === 'vendas-cliente-categoria') {
-        setPorClienteCat(await carregarPorClienteCategoria(where))
+        setPorClienteCat(await carregarPorClienteCategoria(p))
         return
       }
       if (relatorio === 'vendas-cliente-produto') {
-        setPorClienteProd(await carregarPorClienteProduto(where))
+        setPorClienteProd(await carregarPorClienteProduto(p))
         return
       }
       if (relatorio === 'vendas-produto-marca') {
-        setPorMarca(await carregarPorMarca(where))
+        setPorMarca(await carregarPorMarca(p))
         return
       }
       if (relatorio === 'vendas-combo') {
-        setCombos(await carregarCombo(where))
+        setCombos(await carregarCombo(p))
         return
       }
       if (relatorio === 'vendas-retencao') {
-        setRetencao(await carregarRetencao(where))
+        setRetencao(await carregarRetencao(p))
         return
       }
       if (relatorio === 'estoque-movimentacao') {
@@ -152,12 +159,12 @@ export default function Relatorios({
         return
       }
       const [m, h, mp, cv, pv, pp] = await Promise.all([
-        carregarMetricas(filtros.data),
-        carregarVendasPorHora(filtros.data),
-        carregarMeiosPagamento(where),
-        carregarComissaoVendedor(where),
-        carregarPorVendedor(where),
-        carregarPorProduto(where)
+        carregarMetricas(p),
+        carregarVendasPorHora(p),
+        carregarMeiosPagamento(p),
+        carregarComissaoVendedor(p),
+        carregarPorVendedor(p),
+        carregarPorProduto(p)
       ])
       setMetrics(m)
       setChart(h)
@@ -167,7 +174,7 @@ export default function Relatorios({
       setProdutos(pp)
     }
     carregar()
-  }, [relatorio, filtros.data, filtros.tipoData])
+  }, [relatorio, filtros.chave, filtros.ini, filtros.fim, filtros.tipoData, personalizadoIncompleto])
 
   const dadosFiltrados = filtros.hora === 'Todas' ? chart : chart.filter((d) => d.hora === filtros.hora)
 
