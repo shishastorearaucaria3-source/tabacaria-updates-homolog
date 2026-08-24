@@ -1,10 +1,11 @@
 import { app, shell, BrowserWindow, ipcMain, dialog, Tray, Menu, nativeImage } from 'electron'
 import { join, dirname, basename, resolve } from 'node:path'
-import { existsSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { execSync, spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { registerDbHandlers } from './ipc'
 import { servidorClient, getServidorUrl, configurarServidor, lerPortaGravada } from './servidor'
+import { gravarLogServidor } from './log'
 import { versaoAtual, verificarAtualizacao, instalarAtualizacao, getUpdateBaseUrl, setUpdateBaseUrl, tipoInstalacaoAtual } from './update'
 
 const PRODUTO = 'NossoSistema'
@@ -31,6 +32,24 @@ function registrarErroGlobal(): void {
   }
   process.on('uncaughtException', (e) => erroFatal('Erro inesperado', e))
   process.on('unhandledRejection', (e) => erroFatal('Erro inesperado (promessa)', e))
+}
+
+// Fecha o ciclo observável da atualização (R3): o app relançado pelo launcher
+// confere o marcador deixado pelo updater e registra SUCESSO/FALHA com as
+// versões envolvidas. Roda antes de qualquer outra inicialização.
+function validarAtualizacaoPendente(): void {
+  try {
+    const f = join(app.getPath('userData'), 'atualizacao-pendente.json')
+    if (!existsSync(f)) return
+    const m = JSON.parse(readFileSync(f, 'utf8')) as { versaoEsperada?: string; etapas?: string[]; iniciadoEm?: string }
+    const atual = app.getVersion()
+    const sucesso = !!m.versaoEsperada && atual === m.versaoEsperada
+    gravarLogServidor(
+      `[update] pós-atualização: instalada=${atual} esperada=${m.versaoEsperada ?? '?'} => ${sucesso ? 'SUCESSO' : 'FALHA'} (início: ${m.iniciadoEm ?? '?'})`
+    )
+    try { rmSync(f) } catch { /* ignore */ }
+    try { writeFileSync(f + '.ultimo', JSON.stringify({ ...m, status: sucesso ? 'concluida' : 'falhou', versaoFinal: atual }, null, 2), 'utf8') } catch { /* ignore */ }
+  } catch { /* ignore */ }
 }
 
 // Remove atalhos, autostart, registro e a pasta de instalação (via cmd
@@ -164,20 +183,6 @@ async function caminhoServidor(): Promise<string | null> {
     if (existsSync(c)) return c
   }
   return null
-}
-
-function caminhoLogServidor(): string {
-  return join(
-    process.env.APPDATA || join(process.env.USERPROFILE || '.', 'AppData', 'Roaming'),
-    'sistema-loja-tabacaria',
-    'servidor-inicio.log'
-  )
-}
-
-function gravarLogServidor(m: string): void {
-  try {
-    writeFileSync(caminhoLogServidor(), `${new Date().toISOString()} ${m}\n`, { flag: 'a' })
-  } catch { /* ignore */ }
 }
 
 async function iniciarServidorSeNecessario(): Promise<boolean> {
@@ -407,6 +412,7 @@ function criarBandejaServidor(): void {
 
 app.whenReady().then(async () => {
   registrarErroGlobal()
+  validarAtualizacaoPendente()
   if (process.argv.includes('--desinstalar')) {
     desinstalar()
     return

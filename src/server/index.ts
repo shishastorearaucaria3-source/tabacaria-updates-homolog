@@ -103,8 +103,11 @@ export function seed(database: DatabaseSync): void {
   } else {
     database.prepare("INSERT INTO usuarios (nome, login, senha_hash, perfil, comissao_percent) VALUES (?, ?, ?, 'admin', 0)").run('Administrador', 'admin', senha)
   }
-  const count = database.prepare('SELECT COUNT(*) AS c FROM usuarios').get() as { c: number }
-  if (count.c > 1) return
+  // Guarda por CATEGORIAS (não por contagem de usuários): bancos com um único
+  // usuário voltavam a reinserir categorias no segundo boot e morriam com
+  // UNIQUE constraint. Idempotente: semeia somente quando não há nenhuma.
+  const cats = database.prepare('SELECT COUNT(*) AS c FROM categorias').get() as { c: number }
+  if (cats.c > 0) return
   database.prepare('INSERT INTO categorias (nome) VALUES (?)').run('Cigarros')
   database.prepare('INSERT INTO categorias (nome) VALUES (?)').run('Charutos')
   database.prepare('INSERT INTO categorias (nome) VALUES (?)').run('Tabaco')

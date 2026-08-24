@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { join, basename, extname, relative, dirname } from 'node:path'
+import { tmpdir } from 'node:os'
 import {
   existsSync,
   mkdirSync,
@@ -10,11 +11,47 @@ import {
   statSync
 } from 'node:fs'
 import { copyFile } from 'node:fs/promises'
-import { spawn, execSync } from 'node:child_process'
+import { spawn, spawnSync, execSync } from 'node:child_process'
 
 const PRODUTO = 'NossoSistema'
 const APP_ID = 'br.com.lojatabacaria.sistema'
 const APPDATA_DIR = 'sistema-loja-tabacaria'
+
+function gravarLogServidor(msg: string): void {
+  try {
+    const logPath = join(pastaDadosApp(), 'servidor-inicio.log')
+    const line = `${new Date().toISOString()} ${msg}\n`
+    writeFileSync(logPath, line, { flag: 'a', encoding: 'utf8' })
+  } catch { /* ignore */ }
+}
+
+async function rodarComCaptura(exe: string, args: string[], timeoutMs: number): Promise<{ code: number | null; sinal: string; erro?: string }> {
+  return new Promise((resolve) => {
+    const filho = spawn(exe, args, { windowsHide: true, stdio: 'ignore' })
+    let resolvido = false
+    const timer = setTimeout(() => {
+      if (!resolvido) {
+        resolvido = true
+        try { filho.kill('SIGKILL') } catch { /* ignore */ }
+        resolve({ code: null, sinal: 'timeout', erro: `timeout ${timeoutMs}ms` })
+      }
+    }, timeoutMs)
+    filho.on('exit', (code) => {
+      if (!resolvido) {
+        resolvido = true
+        clearTimeout(timer)
+        resolve({ code: code ?? null, sinal: 'exit' })
+      }
+    })
+    filho.on('error', (err) => {
+      if (!resolvido) {
+        resolvido = true
+        clearTimeout(timer)
+        resolve({ code: null, sinal: 'erro', erro: err.message })
+      }
+    })
+  })
+}
 
 function dirPadrao(): string {
   if (process.env.SETUP_INSTALL_DIR) return process.env.SETUP_INSTALL_DIR
@@ -279,23 +316,28 @@ async function instalar(args: { tipo: string }): Promise<{ ok: boolean; erro?: s
   if (!existsSync(appSrc)) {
     return { ok: false, erro: 'Componentes do sistema não encontrados no instalador.' }
   }
+
   try {
-    // Derruba o app instalado ANTES de copiar por cima — senão o exe em
-    // execução fica travado e a cópia falha em silêncio (app quebrado).
+    gravarLogServidor(`[setup] aguardando app fechar: ${dir}`)
     await esperarAppFechado(dir)
-    // Aplicativo completo (o app embute o servidor). Copia por cima —
-    // preserva banco/config em %APPDATA%.
+    gravarLogServidor('[setup] app fechado, copiando arquivos')
     await copiarArvore(appSrc, dir, (n, total, atual) => {
       const win = BrowserWindow.getAllWindows()[0]
       if (win) win.webContents.send('setup:progresso', { etapa: 'aplicativo', arquivos: n, total, atual })
     })
+    gravarLogServidor('[setup] cópia concluída, copiando autoupdate')
+    const autoupdateSrc = join(process.resourcesPath, 'autoupdate')
+    if (existsSync(autoupdateSrc)) {
+      await copiarArvore(autoupdateSrc, join(dir, 'autoupdate'))
+      gravarLogServidor(`[setup] autoupdate copiado para ${join(dir, 'autoupdate')}`)
+    } else {
+      gravarLogServidor('[setup] autoupdate não encontrado no instalador (instalação sem autoupdate)')
+    }
+    gravarLogServidor('[setup] cópia concluída, gravando instalacao.json')
     if (args.tipo === 'servidor') {
-      // Servidor + Sistema: registra autostart headless do app (--servidor)
       registrarServidor(dir)
       gravarConfigServidor()
     } else {
-      // Somente Sistema: remove autostart de servidor. A conexão é
-      // configurada na tela de login ("Outro (rede)").
       removerServidorAutostart()
     }
     writeFileSync(
@@ -303,15 +345,18 @@ async function instalar(args: { tipo: string }): Promise<{ ok: boolean; erro?: s
       JSON.stringify({ tipo: args.tipo, versao: versaoEmbarcada(), instalado_em: new Date().toISOString() }, null, 2),
       'utf8'
     )
+    gravarLogServidor('[setup] instalacao.json gravado')
     gravarRegistro(dir, args.tipo)
     const exe = exeApp(dir)
     if (exe) {
       criarAtalhos(dir, exe)
       if (args.tipo === 'servidor') criarAtalhoServidor(dir, exe)
     }
+    gravarLogServidor('[setup] instalação OK')
     return { ok: true, dir, exe: exe || undefined }
   } catch (e) {
     const err = e as Error
+    gravarLogServidor(`[setup] ERRO instalação: ${err.message}\n${err.stack}`)
     console.error('[setup] erro instalação:', err.message, '\n', err.stack)
     return { ok: false, erro: err.message }
   }
@@ -355,11 +400,41 @@ function matarAppInstalado(dir: string): void {
   } catch { /* ignore */ }
 }
 
-// Derruba o app instalado e ESPERA ele sair (senão a cópia/remoção dos
-// arquivos falha em silêncio porque o exe está travado).
+// Derruba o app da instalação e AGUARDA o término REAL em loop (poll por
+// caminho completo do executável, nunca por nome). Timeout ~10s: se o
+// processo não sair, LANÇA erro — a atualização aborta sem copiar nada,
+// evitando instalação parcial com exe antigo + asar novo.
 async function esperarAppFechado(dir: string): Promise<void> {
-  matarAppInstalado(dir)
-  await new Promise((r) => setTimeout(r, 1500))
+  const exe = exeApp(dir)
+  if (!exe) return
+  const alvo = exe.replace(/'/g, "''")
+  const matar = (): void => {
+    try {
+      const ps = `Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq '${alvo}' } | Stop-Process -Force`
+      spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { encoding: 'utf8', windowsHide: true, timeout: 15000 })
+    } catch { /* ignore */ }
+  }
+  const rodando = (): boolean => {
+    try {
+      const ps = `@((Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq '${alvo}' })).Count`
+      const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { encoding: 'utf8', windowsHide: true, timeout: 15000 })
+      return parseInt(((r.stdout as string) || '0').trim(), 10) > 0
+    } catch {
+      return true // consulta falhou ⇒ trata como ainda rodando até o timeout decidir
+    }
+  }
+  matar()
+  const fim = Date.now() + 10000
+  let reforco = 0
+  while (Date.now() < fim) {
+    if (!rodando()) return
+    reforco++
+    if (reforco % 2 === 0) matar() // reforça o kill durante a espera
+    await new Promise((r) => setTimeout(r, 400))
+  }
+  if (rodando()) {
+    throw new Error(`Aplicativo não encerrou em 10s (${exe}) — atualização abortada sem copiar arquivos`)
+  }
 }
 
 function relançarApp(exe: string): void {

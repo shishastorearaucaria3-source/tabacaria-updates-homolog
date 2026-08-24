@@ -15,7 +15,7 @@
     "servidor:instalar": "npm run build:servidor && node scripts/instalar-servidor.js",
     "build:servidor": "tsc -p tsconfig.server.json",
     "build:servidor-exe": "tsc -p tsconfig.servidor-exe.json && node scripts/copiar-servidor-exe.js",
-    "build:setup": "tsc -p tsconfig.setup.json && node scripts/compilar-setup.js",
+    "build:setup": "node scripts/download-autoupdate-node.js && tsc -p tsconfig.autoupdate.json && tsc -p tsconfig.setup.json && node scripts/compilar-setup.js",
     "build:app": "npm run build:servidor && electron-vite build",
     "package": "npm run build:servidor && electron-vite build && electron-builder --publish never",
     "package:portable": "npm run build:app && electron-builder --config electron-builder.portable.yml --publish never",

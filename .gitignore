@@ -33,3 +33,6 @@ docs/
 *.tsbuildinfo
 *.log
 .DS_Store
+
+# Node.js standalone baixado durante o build (não versionar binário ~83MB)
+build/autoupdate/

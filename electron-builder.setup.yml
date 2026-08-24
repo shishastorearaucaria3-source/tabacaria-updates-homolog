@@ -8,6 +8,12 @@ files:
 extraResources:
   - from: dist-final/win-unpacked
     to: embedded/app
+  - from: build/autoupdate/node.exe
+    to: autoupdate/node.exe
+  - from: out/autoupdate/autoupdate.js
+    to: autoupdate/autoupdate.js
+  - from: out/autoupdate/autoupdate-shared.js
+    to: autoupdate/autoupdate-shared.js
 win:
   icon: build/icones/sistema.png
   target:
