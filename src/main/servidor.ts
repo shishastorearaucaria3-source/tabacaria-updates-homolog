@@ -210,7 +210,7 @@ export const servidorClient = {
   servidorBackupInfo: () => fetch(`${getServidorUrl()}/api/servidor/backup/info`, { headers: headersComChave() }).then((r) => r.json() as Promise<{ ok: boolean; dir: string; backups: { nome: string; data: string; tamanho: number }[] }>),
   servidorDiagnostico: () => post<{ ok: boolean; itens: { nome: string; status: string; detalhe: string }[] }>('/api/servidor/diagnostico', {}),
   servidorCorrigir: () => post<{ ok: boolean; correcoes: string[] }>('/api/servidor/corrigir', {}),
-  servidorZerar: (alvos: string[]) => post<{ ok: boolean; removidos: string[]; erro?: string }>('/api/servidor/zerar', { alvos }),
+  servidorZerar: (alvos: string[]) => post<{ ok: boolean; removidos: string[]; erro?: string }>('/api/servidor/zerar', { alvos, confirmar: true }),
   servidorRestaurar: (arquivo: string) => post<{ ok: boolean; erro?: string }>('/api/servidor/restaurar', { arquivo }),
   estoqueMovimentar: (dados: Record<string, unknown>) =>
     post<{ ok: boolean; documento: string; total: number; itens: number; tipo: string; categoria: string; erro?: string }>(
