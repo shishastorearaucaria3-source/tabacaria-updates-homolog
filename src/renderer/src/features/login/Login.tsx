@@ -21,6 +21,7 @@ export default function Login({ onLogin }: { onLogin: (u: Usuario) => void }) {
   const [urlAtual, setUrlAtual] = useState('')
   const [modoLocal, setModoLocal] = useState(true)
   const [ipManual, setIpManual] = useState('')
+  const [chaveApi, setChaveApi] = useState('')
   const [conexaoMsg, setConexaoMsg] = useState<{ ok: boolean; texto: string } | null>(null)
   const [testando, setTestando] = useState(false)
 
@@ -84,7 +85,9 @@ export default function Login({ onLogin }: { onLogin: (u: Usuario) => void }) {
     setConexaoMsg(null)
     setTestando(true)
     try {
-      const r = await getServidorApi().configurarConexao(opcoes)
+      // Em modo rede, envia a chave de API informada (segredo de conexão).
+      // Em modo local a chave não é necessária (loopback tem acesso integral).
+      const r = await getServidorApi().configurarConexao(opcoes.local ? { local: true } : { local: false, ip: opcoes.ip, apiKey: chaveApi.trim() })
       setUrlAtual(r.url)
       setIps(r.ips)
       setModoLocal(!!opcoes.local)
@@ -195,6 +198,18 @@ export default function Login({ onLogin }: { onLogin: (u: Usuario) => void }) {
                   {testando ? 'Conectando...' : 'Conectar'}
                 </button>
               </div>
+              <div className="login-ip-manual">
+                <input
+                  type="password"
+                  value={chaveApi}
+                  onChange={(e) => setChaveApi(e.target.value)}
+                  placeholder="Chave de API (copie da tela do servidor)"
+                  autoComplete="off"
+                />
+              </div>
+              <p className="nota-config" style={{ fontSize: 12, color: '#6b7280', margin: '4px 0 0' }}>
+                A chave de acesso é exibida no computador do servidor, na tela Servidor → "Chave de acesso da rede". Terminais em rede precisam dela.
+              </p>
             </div>
           )}
 
