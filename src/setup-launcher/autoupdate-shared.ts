@@ -29,8 +29,19 @@ export function pastaDadosApp(): string {
 
 export function exeApp(dir: string): string | null {
   try {
-    for (const f of readdirSync(dir)) {
-      if (extname(f).toLowerCase() === '.exe' && f.toLowerCase() !== basename(process.execPath).toLowerCase()) {
+    const nomesExe = readdirSync(dir).filter((f) => extname(f).toLowerCase() === '.exe');
+    // Prefere o executável da APLICAÇÃO real. O launcher (NossoSistema.exe) e
+    // o uninstaller (Uninstall *.exe) NUNCA são o alvo — só o app do sistema.
+    const app = nomesExe.find(
+      (f) =>
+        f.toLowerCase() !== 'nosso sistema.exe' &&
+        f.toLowerCase() !== 'nos-sistema.exe' &&
+        !/^uninstall/i.test(f) &&
+        f.toLowerCase() !== basename(process.execPath).toLowerCase()
+    );
+    if (app) return join(dir, app);
+    for (const f of nomesExe) {
+      if (f.toLowerCase() !== basename(process.execPath).toLowerCase() && !/^uninstall/i.test(f)) {
         return join(dir, f);
       }
     }
@@ -191,6 +202,60 @@ export function gravarConfigServidor(): void {
     mkdirSync(pastaDadosApp(), { recursive: true });
     writeFileSync(join(pastaDadosApp(), 'servidor.url'), '', 'utf8');
   } catch { /* ignore */ }
+}
+
+// Concede permissão de escrita SOMENTE ao usuário atual na pasta de instalação
+// (necessário para o autoupdate substituir arquivos sem elevação). Idempotente.
+export function concederAclUsuarioAtual(dir: string): void {
+  try {
+    const user = process.env.USERNAME || '';
+    if (!user) return;
+    execSync(`icacls "${dir}" /grant "${user}:(OI)(CI)M" /T /Q`, { windowsHide: true });
+  } catch { /* sem permissão para icacls — autoupdate pode exigir elevação */ }
+}
+
+// Verifica se o processo atual roda com privilégios elevados (admin).
+export function estaElevado(): boolean {
+  try {
+    const ps = `([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)`;
+    const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+    return ((r.stdout || '').trim() || '').toLowerCase() === 'true';
+  } catch {
+    return false;
+  }
+}
+
+// Testa se o diretório é gravável pelo processo atual (cria e apaga um arquivo).
+export function dirGravavel(dir: string): boolean {
+  try {
+    const f = join(dir, `.gravavel-${process.pid}-${Date.now()}`);
+    writeFileSync(f, 'x');
+    rmSync(f, { force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Relança o processo atual elevado (UAC) e AGUARDA o término do processo elevado.
+// Retorna o exit code do processo elevado (0 = sucesso) ou null se não conseguiu
+// lançar / o usuário cancelou o UAC.
+export function relancarElevado(extraEnvs?: Record<string, string>): number | null {
+  try {
+    const ps = [
+      `$env:SETUP_ELEVATED='1'`,
+      ...Object.entries(extraEnvs || {}).map(([k, v]) => `$env:${k}='${String(v).replace(/'/g, "''")}'`),
+      `$p = Start-Process -FilePath '${process.execPath.replace(/'/g, "''")}' -ArgumentList '${process.argv.slice(1).join("' '").replace(/'/g, "''")}' -Verb RunAs -Wait -PassThru`,
+      `if ($p) { exit $p.ExitCode } else { exit 1 }`
+    ].join('\r\n');
+    const b64 = Buffer.from(ps, 'utf16le').toString('base64');
+    const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', b64], { encoding: 'utf8', windowsHide: true, timeout: 600000 });
+    if (r.status !== 0) return null;
+    const code = parseInt((r.stdout || '').trim(), 10);
+    return Number.isInteger(code) ? code : 0;
+  } catch {
+    return null;
+  }
 }
 
 export function removerServidorAutostart(): void {

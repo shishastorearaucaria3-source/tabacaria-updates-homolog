@@ -32,6 +32,10 @@ export default function Login({ onLogin }: { onLogin: (u: Usuario) => void }) {
       setUrlAtual(c.url)
       setModoLocal(c.local)
       if (!c.local && c.ips.length > 0) setIpManual(c.ips[0])
+      // Só busca usuários no mount quando já existe conexão de rede configurada
+      // (chave de API gravada) ou servidor local. Sem chave, NADA é requisitado
+      // antes do usuário informar a chave — evita o 401 "sem chave válida".
+      if (c.local || c.temChave) carregarUsuarios()
     } catch { /* servidor indisponível */ }
   }
 
@@ -53,7 +57,11 @@ export default function Login({ onLogin }: { onLogin: (u: Usuario) => void }) {
       .catch(() => setCarregando(false))
   }, [onLogin])
 
-  useEffect(() => {
+  // Carrega a lista de usuários SOMENTE quando a conexão já está estabelecida
+  // (servidor local respondendo OU URL remota configurada com chave). NUNCA
+  // dispara /api/db/all antes de configurarConexao — senão o servidor bloqueia
+  // a requisição sem chave (401) e o log fica poluído com falsos alertas.
+  const carregarUsuarios = () => {
     if (!hasDbApi()) return
     getDbApi()
       .all(`SELECT id, nome, login, perfil FROM usuarios WHERE ativo = 1 ORDER BY nome`)
@@ -67,7 +75,7 @@ export default function Login({ onLogin }: { onLogin: (u: Usuario) => void }) {
         }
       })
       .catch(() => {})
-  }, [])
+  }
 
   // Segurança: senhas nunca são persistidas neste computador. Remove qualquer
   // senha gravada por versões anteriores (ficavam em texto plano no localStorage).
@@ -93,20 +101,12 @@ export default function Login({ onLogin }: { onLogin: (u: Usuario) => void }) {
       setModoLocal(!!opcoes.local)
       const t = await getServidorApi().testar()
       setConexaoMsg(t.ok ? { ok: true, texto: `Conectado ao servidor em ${t.url}` } : { ok: false, texto: `Sem conexão: ${t.erro}` })
-      carregar()
+      carregarUsuarios()
     } catch (e) {
       setConexaoMsg({ ok: false, texto: `Erro: ${(e as Error).message}` })
     } finally {
       setTestando(false)
     }
-  }
-
-  const carregar = () => {
-    if (!hasDbApi()) return
-    getDbApi()
-      .all(`SELECT id, nome, login, perfil FROM usuarios WHERE ativo = 1 ORDER BY nome`)
-      .then((rows) => setUsuarios(rows as unknown as UsuarioLogin[]))
-      .catch(() => {})
   }
 
   const entrar = async (e: React.FormEvent) => {

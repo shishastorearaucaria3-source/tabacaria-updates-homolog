@@ -185,7 +185,7 @@ export interface ServidorApi {
   corrigir: () => Promise<{ ok: boolean; correcoes: string[] }>
   zerar: (alvos: string[]) => Promise<{ ok: boolean; removidos: string[]; erro?: string }>
   restaurar: () => Promise<{ ok: boolean; erro?: string }>
-  conexao: () => Promise<{ ips: string[]; url: string; local: boolean }>
+  conexao: () => Promise<{ ips: string[]; url: string; local: boolean; temChave?: boolean }>
   configurarConexao: (opcoes: { local?: boolean; ip?: string; url?: string; apiKey?: string }) => Promise<{ ok: boolean; url: string; ips: string[] }>
   testar: () => Promise<{ ok: boolean; url: string; erro?: string }>
   apiKeyGet: () => Promise<{ ok: boolean; api_key: string }>

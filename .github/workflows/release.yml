@@ -25,6 +25,11 @@ jobs:
     timeout-minutes: 120
     env:
       TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+      # Authenticode (PREPARAÇÃO — custo R$0 enquanto os secrets não existirem).
+      # Quando forem adicionados, o electron-builder assina automaticamente.
+      # Secrets ausentes => string vazia => build sem assinatura (normal).
+      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -56,6 +61,20 @@ jobs:
 
       - name: Build instalador customizado (NossoSistema-Setup)
         run: npm run package:setup
+
+      # Authenticode (PREPARAÇÃO — ativa automaticamente quando o secret
+      # WIN_CSC_LINK existir). Sem certificado, o electron-builder apenas
+      # não assina e o build segue normal (custo R$0). Com WIN_CSC_LINK
+      # definido, o electron-builder assina todos os EXEs automaticamente.
+      - name: Verificar assinatura Authenticode (condicional)
+        shell: pwsh
+        run: |
+          if ($env:WIN_CSC_LINK) {
+            Write-Output "WIN_CSC_LINK detectado — modo ESTRITO (falha se NotSigned)."
+          } else {
+            Write-Output "Sem certificado Authenticode — modo INFORMATIVO (não falha)."
+          }
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verificar-assinatura.ps1
 
       - name: Gerar SHA256SUMS
         shell: pwsh

@@ -56,6 +56,10 @@ function getApiKeyAtiva(): string {
   return apiKey
 }
 
+export function temChaveApiGravada(): boolean {
+  return !!getApiKeyAtiva()
+}
+
 export function lerPortaGravada(): number {
   try {
     const f = caminhoArquivoPorta()

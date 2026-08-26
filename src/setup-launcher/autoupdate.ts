@@ -15,6 +15,10 @@ import {
   criarAtalhos,
   criarAtalhoServidor,
   relançarApp,
+  concederAclUsuarioAtual,
+  estaElevado,
+  dirGravavel,
+  relancarElevado,
   lerVersaoInstalada,
   lerTipoInstalado,
   AutoupdateResultado,
@@ -42,6 +46,34 @@ async function runAutoupdate(): Promise<void> {
       erro: err,
     });
     process.exit(1);
+  }
+
+  // Se a pasta de instalação não for gravável pelo processo atual (ex.: pasta
+  // protegida criada por admin) e ainda não elevado, relança a si mesmo ELEVADO
+  // (UAC) para conseguir substituir os arquivos. Aguarda o processo elevado
+  // terminar e replica seu exit code.
+  if (!estaElevado() && !dirGravavel(installDir) && process.env.SETUP_ELEVATED !== '1') {
+    gravarLogServidor(`[autoupdate] pasta não gravável (${installDir}) — relançando elevado`);
+    const code = relancarElevado({
+      SETUP_INSTALL_DIR: installDir,
+      SETUP_PAYLOAD_PATH: payloadPath,
+      SETUP_TIPO: tipo,
+      SETUP_VERSAO_ESPERADA: versaoEsperada,
+      SETUP_UPDATE_URL: process.env.SETUP_UPDATE_URL || '',
+    });
+    if (code === null) {
+      const err = 'Permissão necessária para atualizar. O usuário cancelou a elevação (UAC).';
+      gravarLogServidor(`[autoupdate] ${err}`);
+      escreverMarkerAtomico(obterMarkerPath(), {
+        ok: false,
+        versao: versaoEsperada,
+        timestamp: new Date().toISOString(),
+        estagio: 'elevacao',
+        erro: err,
+      });
+      process.exit(1);
+    }
+    process.exit(code === 0 ? 0 : 1);
   }
 
   gravarLogServidor(`[autoupdate] INICIO dir=${installDir} payload=${payloadPath} tipo=${tipo} versao=${versaoEsperada}`);
@@ -116,7 +148,8 @@ async function runAutoupdate(): Promise<void> {
     gravarLogServidor('[autoupdate] Copiando arquivos...');
     const appSrc = join(extrator, 'resources', 'embedded', 'app');
     const copia = await copiarArvore(appSrc, installDir);
-    gravarLogServidor(`[autoupdate] Copiados ${copia.arquivos} arquivos (${(copia.bytes/1024/1024).toFixed(1)} MB)`);
+    gravarLogServidor('[autoupdate] Copiados ' + copia.arquivos + ' arquivos (' + (copia.bytes/1024/1024).toFixed(1) + ' MB)');
+    concederAclUsuarioAtual(installDir);
 
     gravarLogServidor('[autoupdate] Atualizando configurações...');
     const tipoFinal = tipo === 'cliente' ? 'cliente' : 'servidor';

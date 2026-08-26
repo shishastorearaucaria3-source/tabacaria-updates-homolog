@@ -134,18 +134,19 @@ export default function App() {
   }, [usuario])
 
   useEffect(() => {
+    if (!hasDbApi() || !usuario) return
     getCatalogoApi().getConfig().then((c) => setCatalogoUrl(c.site_url || '')).catch(() => {})
-  }, [])
+  }, [usuario])
 
   useEffect(() => {
-    if (!hasDbApi()) return
+    if (!hasDbApi() || !usuario) return
     getDbApi()
       .get(`SELECT valor FROM config WHERE chave = 'nome_loja'`)
       .then((row) => {
         if (row) setLoja((row as { valor: string | null }).valor ?? 'Minha Tabacaria')
       })
       .catch(() => setLoja('Minha Tabacaria'))
-  }, [])
+  }, [usuario])
 
   useEffect(() => {
     if (!hasDbApi()) return

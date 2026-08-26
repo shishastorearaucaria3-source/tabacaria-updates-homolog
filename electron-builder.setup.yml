@@ -1,5 +1,5 @@
 appId: br.com.lojatabacaria.setup
-productName: NossoSistema Setup
+productName: NossoSistema
 directories:
   output: dist-setup
 files:
@@ -19,11 +19,13 @@ win:
   target:
     - nsis
 nsis:
-  oneClick: true
+  oneClick: false
   perMachine: false
-  allowElevation: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
   createDesktopShortcut: false
   createStartMenuShortcut: false
   runAfterFinish: true
   deleteAppDataOnUninstall: false
   artifactName: NossoSistema-Setup.exe
+  include: build/installer.nsh

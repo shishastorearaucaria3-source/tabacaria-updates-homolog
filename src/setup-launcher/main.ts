@@ -12,6 +12,7 @@ import {
 } from 'node:fs'
 import { copyFile } from 'node:fs/promises'
 import { spawn, spawnSync, execSync } from 'node:child_process'
+import { estaElevado, dirGravavel, relancarElevado } from './autoupdate-shared'
 
 const PRODUTO = 'NossoSistema'
 const APP_ID = 'br.com.lojatabacaria.sistema'
@@ -55,6 +56,10 @@ async function rodarComCaptura(exe: string, args: string[], timeoutMs: number): 
 
 function dirPadrao(): string {
   if (process.env.SETUP_INSTALL_DIR) return process.env.SETUP_INSTALL_DIR
+  // Empacotado: o launcher roda A PARTIR da pasta escolhida pelo usuário no
+  // instalador (dirname de process.execPath). Nada de hardcoded — o sistema é
+  // instalado onde o NSIS colocou o launcher (C:\NossoSistema ou outro).
+  if (app.isPackaged) return dirname(process.execPath)
   return join(process.env.LOCALAPPDATA || join(process.env.USERPROFILE || '.', 'AppData', 'Local'), 'Programs', PRODUTO)
 }
 
@@ -196,8 +201,19 @@ function caminhoEmbedded(): string {
 
 function exeApp(dir: string): string | null {
   try {
-    for (const f of readdirSync(dir)) {
-      if (extname(f).toLowerCase() === '.exe' && f.toLowerCase() !== basename(process.execPath).toLowerCase()) {
+    const nomesExe = readdirSync(dir).filter((f) => extname(f).toLowerCase() === '.exe')
+    // Prefere o executável da APLICAÇÃO real. O launcher (NossoSistema.exe) e
+    // o uninstaller (Uninstall *.exe) NUNCA são o alvo — só o app do sistema.
+    const app = nomesExe.find(
+      (f) =>
+        f.toLowerCase() !== 'nosso sistema.exe' &&
+        f.toLowerCase() !== 'nos-sistema.exe' &&
+        !/^uninstall/i.test(f) &&
+        f.toLowerCase() !== basename(process.execPath).toLowerCase()
+    )
+    if (app) return join(dir, app)
+    for (const f of nomesExe) {
+      if (f.toLowerCase() !== basename(process.execPath).toLowerCase() && !/^uninstall/i.test(f)) {
         return join(dir, f)
       }
     }
@@ -309,12 +325,43 @@ function removerServidorAutostart(): void {
   } catch { /* ignore */ }
 }
 
+// Concede permissão de escrita SOMENTE ao usuário atual na pasta de instalação.
+// Necessário para o autoupdate substituir arquivos sem elevação (o autoupdate
+// roda como usuário comum). NÃO concede ao grupo "Users" inteiro — apenas ao
+// usuário que instalou, preservando a segurança dos demais usuários do sistema.
+function concederAclUsuarioAtual(dir: string): void {
+  try {
+    const user = process.env.USERNAME || ''
+    if (!user) return
+    // (OI)(CI)M = herança de objetos e contêineres + Modify. Aplica em diretórios
+    // e subpastas, mas SOMENTE para o usuário logado que está instalando.
+    execSync(`icacls "${dir}" /grant "${user}:(OI)(CI)M" /T /Q`, { windowsHide: true })
+  } catch { /* sem permissão para icacls — autoupdate pode exigir elevação */ }
+}
+
 async function instalar(args: { tipo: string }): Promise<{ ok: boolean; erro?: string; dir?: string; exe?: string }> {
   const dir = dirPadrao()
   const emb = caminhoEmbedded()
   const appSrc = join(emb, 'app')
   if (!existsSync(appSrc)) {
     return { ok: false, erro: 'Componentes do sistema não encontrados no instalador.' }
+  }
+
+  // Se a pasta de instalação escolhida (ex.: C:\NossoSistema criada por admin)
+  // não for gravável pelo processo atual, relança o launcher ELEVADO (UAC) para
+  // conseguir copiar os arquivos e conceder a ACL ao usuário. Sem isso a cópia
+  // falharia com EPERM em pastas protegidas.
+  if (!estaElevado() && !dirGravavel(dir) && process.env.SETUP_ELEVATED !== '1') {
+    gravarLogServidor(`[setup] pasta não gravável (${dir}) — relançando elevado`)
+    const code = relancarElevado({ SETUP_INSTALL_DIR: dir, SETUP_TIPO: args.tipo })
+    if (code === null) {
+      // Usuário cancelou o UAC ou não conseguiu lançar elevado.
+      return { ok: false, erro: 'Permissão necessária para instalar nesta pasta. Tente novamente e confirme a elevação.' }
+    }
+    // O processo elevado concluiu a instalação. Sai do launcher original sem
+    // relançar o app novamente (o processo elevado já o fez).
+    app.exit(code === 0 ? 0 : 1)
+    return { ok: false, erro: 'Relançado com elevação' }
   }
 
   try {
@@ -333,6 +380,8 @@ async function instalar(args: { tipo: string }): Promise<{ ok: boolean; erro?: s
     } else {
       gravarLogServidor('[setup] autoupdate não encontrado no instalador (instalação sem autoupdate)')
     }
+    gravarLogServidor('[setup] cópia concluída, concedendo ACL ao usuário atual')
+    concederAclUsuarioAtual(dir)
     gravarLogServidor('[setup] cópia concluída, gravando instalacao.json')
     if (args.tipo === 'servidor') {
       registrarServidor(dir)

@@ -2,7 +2,7 @@ import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { readFile, writeFile } from 'node:fs/promises'
 import { extname } from 'node:path'
 import * as XLSX from 'xlsx'
-import { servidorClient, obterIpsRede, configurarConexaoServidor, testarServidor, getServidorUrl } from './servidor'
+import { servidorClient, obterIpsRede, configurarConexaoServidor, testarServidor, getServidorUrl, temChaveApiGravada } from './servidor'
 
 export interface Sessao {
   id: number
@@ -350,10 +350,15 @@ export function registerDbHandlers(): void {
   })
 
   ipcMain.handle('servidor:conexao', async () => {
+    const url = getServidorUrl()
     return {
       ips: obterIpsRede(),
-      url: getServidorUrl(),
-      local: getServidorUrl().startsWith('http://localhost')
+      url,
+      local: url.startsWith('http://localhost'),
+      // Se o terminal já tem a chave de API gravada (servidor.key), há uma
+      // conexão de rede configurada — o login pode carregar usuários no mount.
+      // Sem chave, NADA de dados é buscado até o usuário configurar a conexão.
+      temChave: temChaveApiGravada()
     }
   })
 
