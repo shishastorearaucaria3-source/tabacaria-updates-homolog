@@ -1,43 +1,92 @@
-; NSIS custom para o instalador NossoSistema-Setup (assistente com pasta escolhivel).
-; Pasta padrao sugerida: C:\NossoSistema. O usuario pode alterar na tela do instalador.
-; A aplicacao NAO usa este caminho em runtime — ela descobre sua propria pasta via
-; dirname(process.execPath). Este valor e apenas o diretorio inicial do instalador.
+; ============================================================================
+; installer.nsh — NossoSistema NSIS custom installer
+; ============================================================================
+
+!macro customHeader
+!macroend
 
 !macro customInit
-  ; Se o usuario/autoupdate informou /D=<pasta> na linha de comando, respeita.
-  ; Se NAO informou, define o diretorio padrao sugerido: C:\NossoSistema.
   Push $R0
   !insertmacro GetDParameter $R0
   ${If} $R0 == ""
     StrCpy $INSTDIR "C:\NossoSistema"
   ${EndIf}
   Pop $R0
+  CreateDirectory "$INSTDIR"
 !macroend
 
-; NAO conceder ACL ampla aqui. O launcher concede permissao de escrita APENAS ao
-; usuario atual (nao ao grupo "Users") apos copiar os arquivos — necessario para
-; o autoupdate substituir arquivos sem elevacao. Demais usuarios ficam sem escrita.
+!macro customPageAfterChangeDir
+  Var NossoSistema_Tipo
+  Var NossoSistema_RadioCli
+  Var NossoSistema_RadioSrv
+
+  Page custom fnSelectComponentes fnSelectComponentesLeave
+
+  Function fnSelectComponentes
+    StrCpy $NossoSistema_Tipo "servidor"
+
+    nsDialogs::Create 1018
+    Pop $0
+
+    ${NSD_CreateLabel} 0 0 100% 20u "Selecione os componentes que deseja instalar:"
+    Pop $0
+
+    ${NSD_CreateRadioButton} 0 30u 100% 14u "Somente NossoSistema"
+    Pop $NossoSistema_RadioCli
+
+    ${NSD_CreateLabel} 20u 44u 80% 14u "Instala apenas o aplicativo/PDV. Conecta a um servidor existente."
+    Pop $0
+
+    ${NSD_CreateRadioButton} 0 64u 100% 14u "NossoSistema + Servidor"
+    Pop $NossoSistema_RadioSrv
+
+    ${NSD_CreateLabel} 20u 78u 80% 14u "Instala o servidor local, API, banco de dados e aplicativo completo."
+    Pop $0
+
+    SendMessage $NossoSistema_RadioSrv ${BM_SETCHECK} ${BST_CHECKED} 0
+
+    nsDialogs::Show
+  FunctionEnd
+
+  Function fnSelectComponentesLeave
+    ${NSD_GetState} $NossoSistema_RadioCli $0
+    ${If} $0 == ${BST_CHECKED}
+      StrCpy $NossoSistema_Tipo "cliente"
+    ${Else}
+      StrCpy $NossoSistema_Tipo "servidor"
+    ${EndIf}
+  FunctionEnd
+!macroend
+
 !macro customInstall
+  DetailPrint "Instalando componentes do sistema..."
+  ExecWait '"$INSTDIR\NossoSistema.exe" /S /TIPO=$NossoSistema_Tipo'
 !macroend
 
-; Desinstalador: perguntar se quer manter dados
 !macro customUnInstall
-  ; Verificar se existe pasta de dados
-  Var /GLOBAL _DATA_DIR
-  StrCpy $_DATA_DIR "$INSTDIR\sistema-loja-tabacaria"
+  Delete "$DESKTOP\NossoSistema.lnk"
+  Delete "$DESKTOP\NossoSistema-Servidor.lnk"
+  RMDir /r "$SMPROGRAMS\NossoSistema"
 
-  IfFileExists "$_DATA_DIR\*.*" 0 _no_data_to_ask
+  Delete "$DESKTOP\NossoSistema Servidor.lnk"
+  Delete "$DESKTOP\Servidor.lnk"
+  Delete "$DESKTOP\Iniciar Servidor.lnk"
+  Delete "$DESKTOP\Parar Servidor.lnk"
+  Delete "$DESKTOP\Sistema Loja Tabacaria.lnk"
+  Delete "$SMPROGRAMS\Sistema Loja Tabacaria.lnk"
 
-  MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 \
-    "Deseja remover tambem os dados do sistema?$\n$\nDados encontrados em:$\n$_DATA_DIR$\n$\n(Banco, configuracoes, logs, backups)$\n$\nSe escolher NAO, os dados serao preservados para futura instalacao." \
-    IDYES _remove_data IDNO _keep_data
+  Delete "$INSTDIR\NossoSistema-Servidor.exe"
+  Delete "$INSTDIR\Servidor.exe"
+  Delete "$INSTDIR\NossoSistema.exe"
 
-  _remove_data:
-    RMDir /r "$_DATA_DIR"
-    Goto _no_data_to_ask
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\br.com.lojatabacaria.sistema"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "NossoSistema Servidor"
 
-  _keep_data:
-    ; Nao fazer nada — dados preservados
+  nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="NossoSistema Servidor"'
 
-  _no_data_to_ask:
+  IfFileExists "$INSTDIR\sistema-loja-tabacaria\*.*" 0 +3
+    MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 \
+      "Deseja remover tambem os dados do sistema?$\n$\nDados: $INSTDIR\sistema-loja-tabacaria$\n$\n(Banco, configuracoes, logs, backups)" \
+      IDYES +2 IDNO +1
+    RMDir /r "$INSTDIR\sistema-loja-tabacaria"
 !macroend

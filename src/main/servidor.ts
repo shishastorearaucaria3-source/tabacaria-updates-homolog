@@ -291,22 +291,16 @@ authLogin: async (login: string, senha: string) => {
     }),
   apiKeyGet: () => fetch(`${getServidorUrl()}/api/servidor/apikey`, { headers: headersComSessao() }).then((r) => r.json() as Promise<{ ok: boolean; api_key: string }>),
   apiKeyRegenerar: () => post<{ ok: boolean; api_key: string }>('/api/servidor/apikey/regenerar', {}),
-  // WhatsApp panel proxy (authenticated via Bearer token, not session)
+  // WhatsApp panel proxy (authenticated via the NossoSistema session)
   whatsapp: {
-    login: (user: string, password: string) =>
-      fetch(`${getServidorUrl()}/api/whatsapp/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user, password })
-      }).then((r) => r.json() as Promise<{ ok: boolean; token?: string; error?: string }>),
-    get: (path: string, token: string) =>
+    get: (path: string) =>
       fetch(`${getServidorUrl()}/api/whatsapp${path}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: headersComSessao()
       }).then((r) => r.json()),
-    post: (path: string, body: unknown, token: string) =>
+    post: (path: string, body: unknown) =>
       fetch(`${getServidorUrl()}/api/whatsapp${path}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json', ...headersComSessao() },
         body: JSON.stringify(body)
       }).then((r) => r.json()),
   },

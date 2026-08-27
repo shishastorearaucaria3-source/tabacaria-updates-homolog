@@ -426,14 +426,11 @@ export function registerDbHandlers(): void {
     return servidorClient.estoqueInventarioCancelar(dados ?? { inventario_id: 0 })
   })
 
-  ipcMain.handle('whatsapp:login', (_e, user: string, password: string) => {
-    return servidorClient.whatsapp.login(user, password)
+  ipcMain.handle('whatsapp:get', (_e, path: string) => {
+    return servidorClient.whatsapp.get(path)
   })
-  ipcMain.handle('whatsapp:get', (_e, path: string, token: string) => {
-    return servidorClient.whatsapp.get(path, token)
-  })
-  ipcMain.handle('whatsapp:post', (_e, path: string, body: unknown, token: string) => {
-    return servidorClient.whatsapp.post(path, body, token)
+  ipcMain.handle('whatsapp:post', (_e, path: string, body: unknown) => {
+    return servidorClient.whatsapp.post(path, body)
   })
   ipcMain.handle('whatsapp:status', () => {
     return servidorClient.whatsappStatus()

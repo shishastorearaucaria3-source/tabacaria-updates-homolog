@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { getWhatsAppApi } from '../../shared/db'
 
-type PainelWhatsApp = 'dashboard' | 'bot' | 'conversas' | 'intencoes' | 'mensagens' | 'menu' | 'produtos' | 'entrega' | 'configuracoes' | 'backup'
+type PainelWhatsApp = 'visao' | 'delivery' | 'pedidos' | 'automacao' | 'catalogo' | 'regras' | 'configuracoes'
 
 interface Dashboard {
   conversas: number
@@ -15,6 +15,27 @@ interface Dashboard {
   sem_estoque: number
   bot_enabled: boolean
   delivery_mode: string
+}
+
+interface Pedido {
+  id: number
+  numero: string
+  cliente_nome: string
+  cliente_telefone: string
+  cliente_endereco?: string
+  observacoes?: string
+  subtotal: number
+  taxa_entrega: number
+  total: number
+  status: string
+  criado_em: string
+}
+
+interface PedidoItem {
+  name: string
+  qty: number
+  unit_price: number
+  subtotal: number
 }
 
 interface Conversa {
@@ -64,86 +85,38 @@ interface Produto {
 
 const fmtBRL = (v: number) => `R$ ${Number(v || 0).toFixed(2).replace('.', ',')}`
 
+const MENU_ITENS: [PainelWhatsApp, string][] = [
+  ['visao', 'Visão geral'],
+  ['delivery', 'Delivery'],
+  ['pedidos', 'Pedidos'],
+  ['automacao', 'Automação'],
+  ['catalogo', 'Catálogo'],
+  ['regras', 'Regras e preços'],
+  ['configuracoes', 'Configurações']
+]
+
 export default function AtendimentoWhatsApp() {
-  const [token, setToken] = useState(() => sessionStorage.getItem('wa_token') || '')
-  const [loginUser, setLoginUser] = useState('admin')
-  const [loginPass, setLoginPass] = useState('')
-  const [loginErro, setLoginErro] = useState('')
-  const [tela, setTela] = useState<PainelWhatsApp>('dashboard')
+  const [tela, setTela] = useState<PainelWhatsApp>('visao')
   const [msg, setMsg] = useState('')
 
   const wp = useCallback(async <T = Record<string, unknown>>(method: 'get' | 'post', path: string, body?: unknown): Promise<T> => {
     if (method === 'get') {
-      return getWhatsAppApi().get(path, token) as Promise<T>
+      return getWhatsAppApi().get(path) as Promise<T>
     }
-    return getWhatsAppApi().post(path, body ?? {}, token) as Promise<T>
-  }, [token])
-
-  const handleLogin = async () => {
-    setLoginErro('')
-    try {
-      const r = await getWhatsAppApi().login(loginUser, loginPass)
-      if (r.ok && r.token) {
-        sessionStorage.setItem('wa_token', r.token)
-        setToken(r.token)
-      } else {
-        setLoginErro(r.error || 'Credenciais inválidas')
-      }
-    } catch (e) {
-      setLoginErro(`Erro: ${(e as Error).message}`)
-    }
-  }
-
-  const handleLogout = () => {
-    sessionStorage.removeItem('wa_token')
-    setToken('')
-    setTela('dashboard')
-  }
-
-  if (!token) {
-    return (
-      <div className="page">
-        <div className="page-header"><h2>Atendimento WhatsApp</h2></div>
-        <div className="wa-login">
-          <div className="rp-tabela-card" style={{ maxWidth: 360 }}>
-            <h4>Login do painel</h4>
-            <label className="config-campo">Usuário
-              <input className="input" value={loginUser} onChange={(e) => setLoginUser(e.target.value)} />
-            </label>
-            <label className="config-campo">Senha
-              <input className="input" type="password" value={loginPass} onChange={(e) => setLoginPass(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleLogin()} />
-            </label>
-            {loginErro && <p className="nota-config" style={{ color: '#dc2626' }}>{loginErro}</p>}
-            <button className="btn-primario" onClick={handleLogin}>Entrar</button>
-          </div>
-        </div>
-      </div>
-    )
-  }
+    return getWhatsAppApi().post(path, body ?? {}) as Promise<T>
+  }, [])
 
   return (
     <div className="page">
       <div className="page-header">
-        <h2>Atendimento WhatsApp</h2>
+        <h2>WhatsApp</h2>
         <div className="page-acoes">
           {msg && <span className="nota-config" style={{ marginRight: 8 }}>{msg}</span>}
-          <button className="btn-mini" onClick={handleLogout}>Sair do painel</button>
         </div>
       </div>
       <div className="wa-layout">
         <nav className="wa-sidebar">
-          {([
-            ['dashboard', 'Visão geral'],
-            ['bot', 'Controle do bot'],
-            ['conversas', 'Conversas'],
-            ['intencoes', 'Intenções'],
-            ['mensagens', 'Mensagens'],
-            ['menu', 'Menu'],
-            ['produtos', 'Produtos'],
-            ['entrega', 'Entrega'],
-            ['configuracoes', 'Configurações'],
-            ['backup', 'Backup']
-          ] as const).map(([id, label]) => (
+          {MENU_ITENS.map(([id, label]) => (
             <button
               key={id}
               className={`wa-nav-item ${tela === id ? 'ativa' : ''}`}
@@ -154,42 +127,300 @@ export default function AtendimentoWhatsApp() {
           ))}
         </nav>
         <div className="wa-conteudo">
-          {tela === 'dashboard' && <WaDashboard wp={wp} />}
-          {tela === 'bot' && <WaBot wp={wp} />}
-          {tela === 'conversas' && <WaConversas wp={wp} />}
-          {tela === 'intencoes' && <WaIntencoes wp={wp} />}
-          {tela === 'mensagens' && <WaMensagens wp={wp} />}
-          {tela === 'menu' && <WaMenu wp={wp} />}
-          {tela === 'produtos' && <WaProdutos wp={wp} />}
-          {tela === 'entrega' && <WaEntrega wp={wp} />}
+          {tela === 'visao' && <WaVisaoGeral wp={wp} />}
+          {tela === 'delivery' && <WaDelivery wp={wp} />}
+          {tela === 'pedidos' && <WaPedidos wp={wp} />}
+          {tela === 'automacao' && <WaAutomacao wp={wp} />}
+          {tela === 'catalogo' && <WaCatalogo wp={wp} />}
+          {tela === 'regras' && <WaRegras wp={wp} />}
           {tela === 'configuracoes' && <WaConfig wp={wp} />}
-          {tela === 'backup' && <WaBackup wp={wp} />}
         </div>
       </div>
     </div>
   )
 }
 
-// ── Dashboard ──
-function WaDashboard({ wp }: { wp: (m: 'get' | 'post', p: string, b?: unknown) => Promise<Record<string, unknown>> }) {
+// ── Visão geral ──
+function WaVisaoGeral({ wp }: { wp: (m: 'get' | 'post', p: string, b?: unknown) => Promise<Record<string, unknown>> }) {
   const [d, setD] = useState<Dashboard | null>(null)
-  useEffect(() => { wp('get', '/dashboard').then((r) => setD(r as unknown as Dashboard)).catch(() => {}) }, [wp])
+  const [wa, setWa] = useState<{ running: boolean; configured: boolean } | null>(null)
+  useEffect(() => {
+    wp('get', '/dashboard').then((r) => setD(r as unknown as Dashboard)).catch(() => {})
+    getWhatsAppApi().status().then((r) => setWa(r)).catch(() => {})
+  }, [wp])
   if (!d) return <p className="nota-config">Carregando...</p>
+
+  const modoEntrega = d.delivery_mode === 'distance' ? 'Por distância' : d.delivery_mode === 'zone' ? 'Por área' : 'Taxa fixa'
+
   return (
     <>
       <h3>Visão geral</h3>
       <div className="wa-grid">
+        <div className="wa-card">
+          <span className="muted">Conexão WhatsApp</span>
+          <strong style={{ color: wa?.running ? '#16a34a' : wa?.configured === false ? '#eab308' : '#dc2626' }}>
+            {wa?.running ? '🟢 Conectado' : wa?.configured === false ? '🟡 Não configurado' : '🔴 Desconectado'}
+          </strong>
+        </div>
         <div className="wa-card"><span className="muted">Bot</span><strong>{d.bot_enabled ? '🟢 Ativo' : '🔴 Pausado'}</strong></div>
         <div className="wa-card"><span className="muted">Conversas</span><strong>{d.conversas}</strong></div>
         <div className="wa-card"><span className="muted">Sob bot</span><strong>{d.bot}</strong></div>
-        <div className="wa-card"><span className="muted">Humanos ativos</span><strong>{d.humano}</strong></div>
+        <div className="wa-card"><span className="muted">Precisa de atendimento</span><strong>{d.humano}</strong></div>
         <div className="wa-card"><span className="muted">Pedidos iniciados</span><strong>{d.pedidos_iniciados}</strong></div>
         <div className="wa-card"><span className="muted">Finalizados</span><strong>{d.pedidos_finalizados}</strong></div>
         <div className="wa-card"><span className="muted">Cancelados</span><strong>{d.pedidos_cancelados}</strong></div>
-        <div className="wa-card"><span className="muted">Valor total</span><strong>{fmtBRL(d.valor_total)}</strong></div>
-        <div className="wa-card"><span className="muted">Produtos disponíveis</span><strong>{d.produtos_disponiveis}</strong></div>
-        <div className="wa-card"><span className="muted">Sem estoque</span><strong>{d.sem_estoque}</strong></div>
+        <div className="wa-card"><span className="muted">Faturamento WhatsApp</span><strong>{fmtBRL(d.valor_total)}</strong></div>
+        <div className="wa-card"><span className="muted">Produtos no catálogo</span><strong>{d.produtos_disponiveis}</strong></div>
+        <div className="wa-card"><span className="muted">Sem estoque</span><strong style={{ color: d.sem_estoque > 0 ? '#dc2626' : undefined }}>{d.sem_estoque}</strong></div>
+        <div className="wa-card"><span className="muted">Entrega</span><strong>{modoEntrega}</strong></div>
       </div>
+
+      {d.humano > 0 && (
+        <div className="wa-card" style={{ borderColor: '#eab308', marginTop: 12 }}>
+          <span style={{ color: '#eab308' }}>⚠ {d.humano} conversa(s) aguardando atendimento humano. Veja em Delivery/Conversas.</span>
+        </div>
+      )}
+      {d.sem_estoque > 0 && (
+        <div className="wa-card" style={{ borderColor: '#dc2626', marginTop: 8 }}>
+          <span style={{ color: '#dc2626' }}>⚠ {d.sem_estoque} produto(s) sem estoque no catálogo.</span>
+        </div>
+      )}
+    </>
+  )
+}
+
+// ── Delivery (operacional) ──
+function WaDelivery({ wp }: { wp: (m: 'get' | 'post', p: string, b?: unknown) => Promise<Record<string, unknown>> }) {
+  const [pedidos, setPedidos] = useState<Pedido[]>([])
+  const [aberto, setAberto] = useState<{ pedido: Pedido; itens: PedidoItem[] } | null>(null)
+  const load = useCallback(() => {
+    wp('get', '/delivery/pedidos').then((r) => setPedidos((r as Record<string, unknown>).pedidos as Pedido[])).catch(() => {})
+  }, [wp])
+  useEffect(() => { load() }, [load])
+  const abrir = async (id: number) => {
+    const r = await wp('get', `/pedidos/${id}`)
+    const p = (r as Record<string, unknown>).pedido as Pedido
+    const itens = (r as Record<string, unknown>).itens as PedidoItem[]
+    setAberto({ pedido: p, itens })
+  }
+
+  if (aberto) {
+    return (
+      <>
+        <button className="btn-mini" onClick={() => setAberto(null)}>← Voltar</button>
+        <h3>Pedido {aberto.pedido.numero}</h3>
+        <div className="wa-card">
+          <p><strong>Cliente:</strong> {aberto.pedido.cliente_nome} ({aberto.pedido.cliente_telefone})</p>
+          {aberto.pedido.cliente_endereco && <p><strong>Endereço:</strong> {aberto.pedido.cliente_endereco}</p>}
+          {aberto.pedido.observacoes && <p><strong>Obs:</strong> {aberto.pedido.observacoes}</p>}
+          <p><strong>Status:</strong> {aberto.pedido.status}</p>
+        </div>
+        <div className="rp-tabela-wrap" style={{ marginTop: 8 }}>
+          <table className="rp-tabela">
+            <thead><tr><th>Produto</th><th>Qtd</th><th>Preço</th><th>Subtotal</th></tr></thead>
+            <tbody>
+              {aberto.itens.map((it, i) => (
+                <tr key={i}>
+                  <td>{it.name}</td>
+                  <td>{it.qty}</td>
+                  <td>{fmtBRL(it.unit_price)}</td>
+                  <td>{fmtBRL(it.subtotal)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <p><strong>Subtotal:</strong> {fmtBRL(aberto.pedido.subtotal)} · <strong>Entrega:</strong> {fmtBRL(aberto.pedido.taxa_entrega)}</p>
+          <p><strong>Total:</strong> {fmtBRL(aberto.pedido.total)}</p>
+        </div>
+      </>
+    )
+  }
+
+  return (
+    <>
+      <h3>Delivery</h3>
+      <p className="nota-config">Pedidos para entrega (novos / preparando / em rota) vindos do WhatsApp.</p>
+      {pedidos.length === 0 && <p className="nota-config">Nenhum pedido de entrega no momento.</p>}
+      <div className="rp-tabela-wrap">
+        <table className="rp-tabela">
+          <thead><tr><th>#</th><th>Cliente</th><th>Telefone</th><th>Endereço</th><th>Total</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            {pedidos.map((p) => (
+              <tr key={p.id}>
+                <td>{p.numero}</td>
+                <td>{p.cliente_nome}</td>
+                <td>{p.cliente_telefone}</td>
+                <td>{(p.cliente_endereco || '—').slice(0, 40)}</td>
+                <td>{fmtBRL(p.total)}</td>
+                <td><span className="wa-tag">{p.status}</span></td>
+                <td><button className="btn-mini" onClick={() => abrir(p.id)}>Abrir</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  )
+}
+
+// ── Pedidos (WhatsApp) ──
+function WaPedidos({ wp }: { wp: (m: 'get' | 'post', p: string, b?: unknown) => Promise<Record<string, unknown>> }) {
+  const [pedidos, setPedidos] = useState<Pedido[]>([])
+  const [filtro, setFiltro] = useState('')
+  const [aberto, setAberto] = useState<{ pedido: Pedido; itens: PedidoItem[] } | null>(null)
+  const load = useCallback(() => {
+    wp('get', '/pedidos').then((r) => setPedidos((r as Record<string, unknown>).pedidos as Pedido[])).catch(() => {})
+  }, [wp])
+  useEffect(() => { load() }, [load])
+  const abrir = async (id: number) => {
+    const r = await wp('get', `/pedidos/${id}`)
+    setAberto({ pedido: (r as Record<string, unknown>).pedido as Pedido, itens: (r as Record<string, unknown>).itens as PedidoItem[] })
+  }
+
+  const statuses = ['novo', 'preparando', 'em_rota', 'finalizado', 'cancelado']
+  const list = !filtro ? pedidos : pedidos.filter((p) => p.status === filtro)
+
+  if (aberto) {
+    return (
+      <>
+        <button className="btn-mini" onClick={() => setAberto(null)}>← Voltar</button>
+        <h3>Pedido {aberto.pedido.numero}</h3>
+        <div className="wa-card">
+          <p><strong>Cliente:</strong> {aberto.pedido.cliente_nome} ({aberto.pedido.cliente_telefone})</p>
+          {aberto.pedido.cliente_endereco && <p><strong>Endereço:</strong> {aberto.pedido.cliente_endereco}</p>}
+          {aberto.pedido.observacoes && <p><strong>Obs:</strong> {aberto.pedido.observacoes}</p>}
+          <p><strong>Status:</strong> {aberto.pedido.status} · <strong>Criado em:</strong> {aberto.pedido.criado_em}</p>
+        </div>
+        <div className="rp-tabela-wrap" style={{ marginTop: 8 }}>
+          <table className="rp-tabela">
+            <thead><tr><th>Produto</th><th>Qtd</th><th>Preço</th><th>Subtotal</th></tr></thead>
+            <tbody>
+              {aberto.itens.map((it, i) => (
+                <tr key={i}><td>{it.name}</td><td>{it.qty}</td><td>{fmtBRL(it.unit_price)}</td><td>{fmtBRL(it.subtotal)}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <p><strong>Subtotal:</strong> {fmtBRL(aberto.pedido.subtotal)} · <strong>Entrega:</strong> {fmtBRL(aberto.pedido.taxa_entrega)}</p>
+          <p><strong>Total:</strong> {fmtBRL(aberto.pedido.total)}</p>
+        </div>
+      </>
+    )
+  }
+
+  return (
+    <>
+      <h3>Pedidos do WhatsApp</h3>
+      <div style={{ marginBottom: 8 }}>
+        <select className="input" style={{ width: 'auto' }} value={filtro} onChange={(e) => setFiltro(e.target.value)}>
+          <option value="">Todos</option>
+          {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+      </div>
+      <div className="rp-tabela-wrap">
+        <table className="rp-tabela">
+          <thead><tr><th>#</th><th>Cliente</th><th>Telefone</th><th>Total</th><th>Status</th><th>Criado</th><th></th></tr></thead>
+          <tbody>
+            {list.map((p) => (
+              <tr key={p.id}>
+                <td>{p.numero}</td>
+                <td>{p.cliente_nome}</td>
+                <td>{p.cliente_telefone}</td>
+                <td>{fmtBRL(p.total)}</td>
+                <td><span className={`wa-tag ${p.status}`}>{p.status}</span></td>
+                <td>{p.criado_em}</td>
+                <td><button className="btn-mini" onClick={() => abrir(p.id)}>Abrir</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  )
+}
+
+// ── Automação ──
+function WaAutomacao({ wp }: { wp: (m: 'get' | 'post', p: string, b?: unknown) => Promise<Record<string, unknown>> }) {
+  const [secao, setSecao] = useState<'bot' | 'intencoes' | 'mensagens'>('bot')
+  return (
+    <>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+        {([['bot', 'Atendimento'], ['intencoes', 'Intenções'], ['mensagens', 'Mensagens']] as const).map(([id, label]) => (
+          <button key={id} className={`btn-mini ${secao === id ? '' : ''}`} style={secao === id ? { background: '#1f2937', color: '#fff' } : undefined} onClick={() => setSecao(id)}>{label}</button>
+        ))}
+      </div>
+      {secao === 'bot' && <WaBot wp={wp} />}
+      {secao === 'intencoes' && <WaIntencoes wp={wp} />}
+      {secao === 'mensagens' && <WaMensagens wp={wp} />}
+    </>
+  )
+}
+
+// ── Catálogo ──
+function WaCatalogo({ wp }: { wp: (m: 'get' | 'post', p: string, b?: unknown) => Promise<Record<string, unknown>> }) {
+  const [prods, setProds] = useState<Produto[]>([])
+  const load = useCallback(() => { wp('get', '/products').then((r) => setProds((r as Record<string, unknown>).products as Produto[])).catch(() => {}) }, [wp])
+  useEffect(() => { load() }, [load])
+  const toggleVis = async (id: number, visible: boolean) => { await wp('post', '/products/visible', { id, visible }); load() }
+  return (
+    <>
+      <h3>Catálogo</h3>
+      <p className="nota-config">Controla quais produtos aparecem para o cliente no WhatsApp — nunca altera o estoque real.</p>
+      <div className="rp-tabela-wrap">
+        <table className="rp-tabela">
+          <thead><tr><th>Produto</th><th>Categoria</th><th>Preço</th><th>Estoque</th><th>Visível</th></tr></thead>
+          <tbody>
+            {prods.map((p) => (
+              <tr key={p.id}>
+                <td>{p.name}</td>
+                <td>{p.category || '—'}</td>
+                <td>{fmtBRL(p.price)}</td>
+                <td>{p.stock}</td>
+                <td>{p.available === 1 && Number(p.stock) > 0 ? (
+                  <input type="checkbox" checked={!!p.whatsapp_visible} onChange={(e) => toggleVis(p.id, e.target.checked)} />
+                ) : <span className="nota-config">Fora</span>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  )
+}
+
+// ── Regras e preços (entrega) ──
+function WaRegras({ wp }: { wp: (m: 'get' | 'post', p: string, b?: unknown) => Promise<Record<string, unknown>> }) {
+  const [s, setS] = useState<Record<string, string>>({})
+  const [msg, setMsg] = useState('')
+  useEffect(() => { wp('get', '/delivery/settings').then((r) => setS((r as Record<string, unknown>).settings as Record<string, string>)).catch(() => {}) }, [wp])
+  const save = async () => { await wp('post', '/delivery/settings', s); setMsg('Salvo.') }
+  const k = (key: string) => s[key] ?? ''
+  return (
+    <>
+      <h3>Regras e preços da entrega</h3>
+      {msg && <p className="nota-config">{msg}</p>}
+      <div className="wa-grid" style={{ maxWidth: 600 }}>
+        <label className="config-campo">Modo de cobrança
+          <select className="input" value={k('delivery_mode')} onChange={(e) => setS({ ...s, delivery_mode: e.target.value })}>
+            <option value="fixed">Taxa fixa</option>
+            <option value="distance">Por distância</option>
+            <option value="zone">Por área</option>
+          </select>
+        </label>
+        <label className="config-campo">Taxa fixa (R$)
+          <input className="input" value={k('fixed_fee')} onChange={(e) => setS({ ...s, fixed_fee: e.target.value })} />
+        </label>
+        <label className="config-campo">Frete grátis acima de (R$)
+          <input className="input" value={k('free_above')} onChange={(e) => setS({ ...s, free_above: e.target.value })} />
+        </label>
+        <label className="config-campo">Pedido mínimo (R$)
+          <input className="input" value={k('min_order')} onChange={(e) => setS({ ...s, min_order: e.target.value })} />
+        </label>
+      </div>
+      <button className="btn-primario" onClick={save} style={{ marginTop: 12 }}>Salvar</button>
     </>
   )
 }
@@ -379,122 +610,7 @@ function WaMensagens({ wp }: { wp: (m: 'get' | 'post', p: string, b?: unknown) =
   )
 }
 
-// ── Menu ──
-function WaMenu({ wp }: { wp: (m: 'get' | 'post', p: string, b?: unknown) => Promise<Record<string, unknown>> }) {
-  const [items, setItems] = useState<MenuItem[]>([])
-  const [novo, setNovo] = useState({ position: 0, label: '', action: 'products' })
-  const load = useCallback(() => { wp('get', '/menu').then((r) => setItems((r as Record<string, unknown>).items as MenuItem[])).catch(() => {}) }, [wp])
-  useEffect(() => { load() }, [load])
-  const saveItem = async (it: MenuItem) => { await wp('post', '/menu/save', it); load() }
-  const delItem = async (id: number) => { if (!confirm('Excluir?')) return; await wp('post', '/menu/delete', { id }); load() }
-  const addItem = async () => { if (!novo.label.trim()) return; await wp('post', '/menu/save', { ...novo, enabled: true }); setNovo({ position: 0, label: '', action: 'products' }); load() }
-  const acoes = ['products', 'search', 'order', 'my_orders', 'handoff', 'hours']
-  return (
-    <>
-      <h3>Menu do WhatsApp</h3>
-      <p className="nota-config">Sem opções cadastradas o bot usa o menu padrão interno.</p>
-      <div className="rp-tabela-wrap">
-        <table className="rp-tabela">
-          <thead><tr><th>#</th><th>Texto</th><th>Ação</th><th>Ativo</th><th></th></tr></thead>
-          <tbody>
-            {items.map((it) => (
-              <tr key={it.id}>
-                <td>{it.position}</td>
-                <td>{it.label}</td>
-                <td><code>{it.action}</code></td>
-                <td>{it.enabled ? '✅' : '⛔'}</td>
-                <td>
-                  <button className="btn-mini" onClick={() => saveItem({ ...it, enabled: !it.enabled })}>{it.enabled ? 'Desativar' : 'Ativar'}</button>
-                  <button className="btn-mini" onClick={() => delItem(it.id)}>Excluir</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <h4 style={{ marginTop: 16 }}>Nova opção</h4>
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-        <input className="input" type="number" style={{ width: 60 }} placeholder="#" value={novo.position || ''} onChange={(e) => setNovo({ ...novo, position: Number(e.target.value) })} />
-        <input className="input" placeholder="Texto" value={novo.label} onChange={(e) => setNovo({ ...novo, label: e.target.value })} style={{ flex: 1 }} />
-        <select className="input" style={{ width: 'auto' }} value={novo.action} onChange={(e) => setNovo({ ...novo, action: e.target.value })}>
-          {acoes.map((a) => <option key={a} value={a}>{a}</option>)}
-        </select>
-        <button className="btn-primario" onClick={addItem}>Adicionar</button>
-      </div>
-    </>
-  )
-}
-
-// ── Products ──
-function WaProdutos({ wp }: { wp: (m: 'get' | 'post', p: string, b?: unknown) => Promise<Record<string, unknown>> }) {
-  const [prods, setProds] = useState<Produto[]>([])
-  const load = useCallback(() => { wp('get', '/products').then((r) => setProds((r as Record<string, unknown>).products as Produto[])).catch(() => {}) }, [wp])
-  useEffect(() => { load() }, [load])
-  const toggleVis = async (id: number, visible: boolean) => { await wp('post', '/products/visible', { id, visible }); load() }
-  return (
-    <>
-      <h3>Produtos</h3>
-      <p className="nota-config">Controla a visibilidade no WhatsApp — nunca altera estoque real.</p>
-      <div className="rp-tabela-wrap">
-        <table className="rp-tabela">
-          <thead><tr><th>Produto</th><th>Categoria</th><th>Preço</th><th>Estoque</th><th>Visível</th></tr></thead>
-          <tbody>
-            {prods.map((p) => (
-              <tr key={p.id}>
-                <td>{p.name}</td>
-                <td>{p.category || '—'}</td>
-                <td>{fmtBRL(p.price)}</td>
-                <td>{p.stock}</td>
-                <td>{p.available === 1 && Number(p.stock) > 0 ? (
-                  <input type="checkbox" checked={!!p.whatsapp_visible} onChange={(e) => toggleVis(p.id, e.target.checked)} />
-                ) : <span className="nota-config">Fora</span>}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </>
-  )
-}
-
-// ── Delivery ──
-function WaEntrega({ wp }: { wp: (m: 'get' | 'post', p: string, b?: unknown) => Promise<Record<string, unknown>> }) {
-  const [s, setS] = useState<Record<string, string>>({})
-  const [msg, setMsg] = useState('')
-  useEffect(() => { wp('get', '/delivery/settings').then((r) => setS((r as Record<string, unknown>).settings as Record<string, string>)).catch(() => {}) }, [wp])
-  const save = async () => {
-    await wp('post', '/delivery/settings', s)
-    setMsg('Salvo.')
-  }
-  const k = (key: string) => s[key] ?? ''
-  return (
-    <>
-      <h3>Entrega — Configuração</h3>
-      {msg && <p className="nota-config">{msg}</p>}
-      <div className="wa-grid" style={{ maxWidth: 600 }}>
-        <label className="config-campo">Modo
-          <select className="input" value={k('delivery_mode')} onChange={(e) => setS({ ...s, delivery_mode: e.target.value })}>
-            <option value="fixed">Taxa fixa</option>
-            <option value="distance">Por distância</option>
-            <option value="zone">Por área</option>
-          </select>
-        </label>
-        <label className="config-campo">Taxa fixa (R$)
-          <input className="input" value={k('fixed_fee')} onChange={(e) => setS({ ...s, fixed_fee: e.target.value })} />
-        </label>
-        <label className="config-campo">Frete grátis acima (R$)
-          <input className="input" value={k('free_above')} onChange={(e) => setS({ ...s, free_above: e.target.value })} />
-        </label>
-        <label className="config-campo">Pedido mínimo (R$)
-          <input className="input" value={k('min_order')} onChange={(e) => setS({ ...s, min_order: e.target.value })} />
-        </label>
-      </div>
-      <button className="btn-primario" onClick={save} style={{ marginTop: 12 }}>Salvar</button>
-    </>
-  )
-}
-
-// ── Settings ──
+// ── Settings (gerais) ──
 function WaConfig({ wp }: { wp: (m: 'get' | 'post', p: string, b?: unknown) => Promise<Record<string, unknown>> }) {
   const [s, setS] = useState<Record<string, string>>({})
   const [msg, setMsg] = useState('')
@@ -502,7 +618,7 @@ function WaConfig({ wp }: { wp: (m: 'get' | 'post', p: string, b?: unknown) => P
   const save = async () => { await wp('post', '/delivery/settings', s); setMsg('Salvo.') }
   return (
     <>
-      <h3>Configurações gerais</h3>
+      <h3>Configurações</h3>
       {msg && <p className="nota-config">{msg}</p>}
       <div className="wa-grid" style={{ maxWidth: 600 }}>
         <label className="config-campo">Timeout da conversa (min)
@@ -513,6 +629,7 @@ function WaConfig({ wp }: { wp: (m: 'get' | 'post', p: string, b?: unknown) => P
         </label>
       </div>
       <button className="btn-primario" onClick={save} style={{ marginTop: 12 }}>Salvar</button>
+      <WaBackup wp={wp} />
     </>
   )
 }
@@ -552,14 +669,14 @@ function WaBackup({ wp }: { wp: (m: 'get' | 'post', p: string, b?: unknown) => P
     input.click()
   }
   return (
-    <>
-      <h3>Backup das configurações</h3>
+    <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #eee' }}>
+      <h4>Backup das configurações</h4>
       {msg && <p className="nota-config">{msg}</p>}
       <div style={{ display: 'flex', gap: 8 }}>
         <button className="btn-primario" onClick={exportar}>Exportar configurações</button>
         <button className="btn-secundario" onClick={importar}>Importar (arquivo .json)</button>
       </div>
       <p className="nota-config" style={{ marginTop: 8 }}>Contém mensagens, intenções, frases, menu, categorias, entrega e configurações comerciais.</p>
-    </>
+    </div>
   )
 }

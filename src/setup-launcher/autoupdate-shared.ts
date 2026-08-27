@@ -29,22 +29,26 @@ export function pastaDadosApp(): string {
 
 export function exeApp(dir: string): string | null {
   try {
+    // Após instalação, NossoSistema.exe é o app (não mais o launcher).
+    const nossoSistema = join(dir, 'NossoSistema.exe');
+    if (existsSync(nossoSistema)) return nossoSistema;
     const nomesExe = readdirSync(dir).filter((f) => extname(f).toLowerCase() === '.exe');
-    // Prefere o executável da APLICAÇÃO real. O launcher (NossoSistema.exe) e
-    // o uninstaller (Uninstall *.exe) NUNCA são o alvo — só o app do sistema.
     const app = nomesExe.find(
       (f) =>
-        f.toLowerCase() !== 'nosso sistema.exe' &&
         f.toLowerCase() !== 'nos-sistema.exe' &&
-        !/^uninstall/i.test(f) &&
-        f.toLowerCase() !== basename(process.execPath).toLowerCase()
+        !/^uninstall/i.test(f)
     );
     if (app) return join(dir, app);
-    for (const f of nomesExe) {
-      if (f.toLowerCase() !== basename(process.execPath).toLowerCase() && !/^uninstall/i.test(f)) {
-        return join(dir, f);
-      }
-    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+export function exeServidor(dir: string): string | null {
+  try {
+    const srv = join(dir, 'NossoSistema-Servidor.exe');
+    if (existsSync(srv)) return srv;
+    const antigo = join(dir, 'Servidor.exe');
+    if (existsSync(antigo)) return antigo;
   } catch { /* ignore */ }
   return null;
 }
@@ -284,7 +288,7 @@ export function criarAtalho(nome: string, alvo: string, pastaLnk: string, icone?
 }
 
 // Remove atalhos técnicos antigos que o próprio sistema criou em versões
-// anteriores. Mantém apenas os dois oficiais: "NossoSistema" e "NossoSistema Servidor".
+// anteriores. Os atalhos oficiais novos são: "NossoSistema" e "Servidor".
 export function limparAtalhosAntigos(): void {
   const desktop = join(process.env.USERPROFILE || '.', 'Desktop');
   const menu = join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', PRODUTO);
@@ -294,7 +298,8 @@ export function limparAtalhosAntigos(): void {
     'Parar Servidor.lnk',
     'Sistema Loja Tabacaria.lnk',
     'NossoSistema Setup.lnk',
-    'NossoSistema-Servidor.lnk'
+    'NossoSistema-Servidor.lnk',
+    'NossoSistema Servidor.lnk'
   ];
   for (const nome of antigos) {
     for (const pasta of [desktop, menu]) {
@@ -306,20 +311,31 @@ export function limparAtalhosAntigos(): void {
   }
 }
 
-// Cria SOMENTE os dois atalhos oficiais:
-//   - "NossoSistema" → sistema/PDV (sem flag)
-//   - "NossoSistema Servidor" → painel do servidor (--servidor --abrir-painel)
-export function criarAtalhos(dir: string, exe: string): void {
+// Cria atalhos com base no tipo de instalação:
+//   - "cliente": apenas "NossoSistema" (PDV/sistema)
+//   - "servidor": "NossoSistema" + "NossoSistema-Servidor"
+export function criarAtalhos(dir: string, tipo: string): void {
   limparAtalhosAntigos();
   const desktop = join(process.env.USERPROFILE || '.', 'Desktop');
   const menu = join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', PRODUTO);
   const iconeSistema = join(dir, 'resources', 'sistema.ico');
   const iconeServidor = join(dir, 'resources', 'servidor.ico');
-  criarAtalho(PRODUTO, exe, desktop, existsSync(iconeSistema) ? iconeSistema : exe);
-  criarAtalho(PRODUTO, exe, menu, existsSync(iconeSistema) ? iconeSistema : exe);
-  const args = '--servidor --abrir-painel';
-  criarAtalho(`${PRODUTO} Servidor`, exe, desktop, existsSync(iconeServidor) ? iconeServidor : exe, args);
-  criarAtalho(`${PRODUTO} Servidor`, exe, menu, existsSync(iconeServidor) ? iconeServidor : exe, args);
+
+  // NossoSistema (PDV) — executável NossoSistema.exe, sem argumentos
+  const exe = exeApp(dir);
+  if (exe) {
+    criarAtalho(PRODUTO, exe, desktop, existsSync(iconeSistema) ? iconeSistema : exe);
+    criarAtalho(PRODUTO, exe, menu, existsSync(iconeSistema) ? iconeSistema : exe);
+  }
+
+  // Servidor — executável separado NossoSistema-Servidor.exe
+  if (tipo === 'servidor') {
+    const srv = exeServidor(dir) || exe;
+    if (srv) {
+      criarAtalho('NossoSistema-Servidor', srv, desktop, existsSync(iconeServidor) ? iconeServidor : srv);
+      criarAtalho('NossoSistema-Servidor', srv, menu, existsSync(iconeServidor) ? iconeServidor : srv);
+    }
+  }
 }
 
 export function relançarApp(exe: string): void {

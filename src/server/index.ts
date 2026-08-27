@@ -1385,7 +1385,7 @@ export function iniciarServidor(porta = 3210): void {
   })
 
   // ---------- WhatsApp Bot ----------
-  registerWhatsAppRoutes(app, database)
+  registerWhatsAppRoutes(app, database, (token) => (token ? sessoes.has(token) : false))
 
   // Registra erros de todas as rotas da API no log
   registrarErrosApi(app)

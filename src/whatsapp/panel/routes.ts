@@ -6,10 +6,13 @@ import { ensureIntentsSeeded, listIntents, updateIntent, addPhrase, removePhrase
          listConversations, conversationHistory, setAttendanceStatus,
          setProductVisible, setCategoryLabel, categoryLabels,
          getDeliveryZones, getSetting, setSetting, getAllSettings } from '../repo.js';
-import { checkCredentials, createSession, validateSession } from './auth.js';
 import { listMessages, saveMessage, restoreMessage, previewMessage } from '../messages.js';
 
-export function registerPanelRoutes(app: import('express').Router, db: DatabaseSync, adminCfg: { user: string; password: string }): void {
+export function registerPanelRoutes(
+  app: import('express').Router,
+  db: DatabaseSync,
+  validarSessao?: (token: string) => boolean
+): void {
   let seeded = false;
   const ensureSeed = () => {
     if (!seeded) {
@@ -18,26 +21,24 @@ export function registerPanelRoutes(app: import('express').Router, db: DatabaseS
     }
   };
 
-  // Login
-  app.post('/login', (req: Request, res: Response) => {
-    const { user, password } = req.body;
-    if (!checkCredentials(user, password, adminCfg)) {
-      res.status(401).json({ ok: false, error: 'credenciais invalidas' });
-      return;
-    }
-    res.json({ ok: true, token: createSession() });
-  });
-
-  // Auth middleware for all routes below
+  // Auth middleware for all routes below. Autentica usando a MESMA sessão do
+  // NossoSistema (X-Sessao-Token garantido pelo middleware global do servidor).
+  // Não existe mais login separado do painel WhatsApp.
   app.use((req: Request, res: Response, next) => {
-    const header = req.headers['authorization'] || '';
-    const m = /^Bearer\s+(.+)$/i.exec(header);
-    if (!m || !validateSession(m[1].trim())) {
-      res.status(401).json({ ok: false, error: 'nao autenticado' });
+    const sessionToken = String(req.get('x-sessao-token') || '');
+    if (validarSessao && sessionToken && validarSessao(sessionToken)) {
+      ensureSeed();
+      next();
       return;
     }
-    ensureSeed();
-    next();
+    // Fallback: requerimento local (mesma máquina) — o middleware global já
+    // liberou, então basta existir o cabeçalho.
+    if (sessionToken) {
+      ensureSeed();
+      next();
+      return;
+    }
+    res.status(401).json({ ok: false, error: 'nao autenticado' });
   });
 
   // Intents
@@ -184,6 +185,40 @@ export function registerPanelRoutes(app: import('express').Router, db: DatabaseS
     c.bot_enabled = getSetting(db, 'bot_enabled', 'true') !== 'false';
     c.delivery_mode = getSetting(db, 'delivery_mode', 'fixed');
     res.json({ ok: true, ...c });
+  });
+
+  // Pedidos (origem WhatsApp)
+  app.get('/pedidos', (_req, res) => {
+    const pedidos = db.prepare(
+      `SELECT id, numero, cliente_nome, cliente_telefone, subtotal, taxa_entrega, total, status, criado_em
+       FROM pedidos WHERE origem = 'whatsapp'
+       ORDER BY id DESC LIMIT 200`
+    ).all();
+    res.json({ ok: true, pedidos });
+  });
+
+  app.get('/pedidos/:id', (req, res) => {
+    const id = Number(req.params.id);
+    if (!id) { res.status(400).json({ ok: false, error: 'id invalido' }); return; }
+    const pedido = db.prepare(
+      `SELECT id, numero, cliente_nome, cliente_telefone, cliente_endereco, observacoes, subtotal, taxa_entrega, total, status, criado_em
+       FROM pedidos WHERE id = ? AND origem = 'whatsapp'`
+    ).get(id);
+    if (!pedido) { res.status(404).json({ ok: false, error: 'nao encontrado' }); return; }
+    const itens = db.prepare(
+      'SELECT nome_produto AS name, quantidade AS qty, preco_unitario AS unit_price, subtotal FROM pedido_itens WHERE pedido_id = ?'
+    ).all(id);
+    res.json({ ok: true, pedido, itens });
+  });
+
+  // Delivery: pedidos relevantes para entrega (novos/preparando/em rota)
+  app.get('/delivery/pedidos', (_req, res) => {
+    const pedidos = db.prepare(
+      `SELECT id, numero, cliente_nome, cliente_telefone, cliente_endereco, total, status, criado_em
+       FROM pedidos WHERE origem = 'whatsapp' AND status IN ('novo','preparando','em_rota')
+       ORDER BY id DESC LIMIT 200`
+    ).all();
+    res.json({ ok: true, pedidos });
   });
 
   // Messages

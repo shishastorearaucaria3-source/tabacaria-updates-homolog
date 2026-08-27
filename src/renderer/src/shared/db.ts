@@ -272,9 +272,8 @@ export function getEstoqueApi(): EstoqueApi {
 }
 
 export interface WhatsAppApi {
-  login: (user: string, password: string) => Promise<{ ok: boolean; token?: string; error?: string }>
-  get: (path: string, token: string) => Promise<Record<string, unknown>>
-  post: (path: string, body: unknown, token: string) => Promise<Record<string, unknown>>
+  get: (path: string) => Promise<Record<string, unknown>>
+  post: (path: string, body: unknown) => Promise<Record<string, unknown>>
   status: () => Promise<{ ok: boolean; running: boolean; configured: boolean }>
 }
 

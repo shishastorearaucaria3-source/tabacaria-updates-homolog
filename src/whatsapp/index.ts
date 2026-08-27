@@ -60,9 +60,12 @@ export function stopWhatsApp(): void {
   logger.info(TAG, 'WhatsApp bot parado');
 }
 
-export function registerWhatsAppRoutes(app: express.Express, db: DatabaseSync): void {
+export function registerWhatsAppRoutes(
+  app: express.Express,
+  db: DatabaseSync,
+  validarSessaoPanel?: (token: string) => boolean
+): void {
   const cfg = getWhatsAppConfig(db);
-  const adminCfg = { user: cfg.adminUser, password: cfg.adminPassword };
 
   // Start WhatsApp on server boot
   startWhatsApp(db);
@@ -79,9 +82,9 @@ export function registerWhatsAppRoutes(app: express.Express, db: DatabaseSync): 
     app.post('/webhooks/wa-web-plus', webhookHandler);
   }
 
-  // Management API (authenticated)
+  // Management API (authenticated via the NossoSistema session)
   const panelRouter = express.Router();
-  registerPanelRoutes(panelRouter, db, adminCfg);
+  registerPanelRoutes(panelRouter, db, validarSessaoPanel);
   app.use('/api/whatsapp', panelRouter);
 
   // Convenience endpoints on main app

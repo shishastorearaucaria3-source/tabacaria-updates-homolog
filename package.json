@@ -1,6 +1,6 @@
 {
   "name": "sistema-loja-tabacaria",
-  "version": "1.0.1",
+  "version": "1.0.8",
   "description": "Sistema de gestão para loja de tabacaria: PVD balcão, estoque, financeiro, CRM, comissão e delivery online",
   "main": "out/main/index.js",
   "author": "Loja Tabacaria",
@@ -20,7 +20,7 @@
     "package": "npm run build:servidor && electron-vite build && electron-builder --publish never",
     "package:portable": "npm run build:app && electron-builder --config electron-builder.portable.yml --publish never",
     "package:servidor": "npm run build:servidor && npm run build:servidor-exe && electron-builder --config electron-builder.servidor.yml --config.extraMetadata.main=out/servidor-exe/servidor-exe/main.js",
-    "package:setup": "npm run build:setup && electron-builder --config electron-builder.setup.yml --config.extraMetadata.main=out/setup-launcher/main.js --publish never",
+    "package:setup": "npm run build:app && electron-builder --config electron-builder.portable.yml --publish never && node scripts/copiar-servidor-dist.js && npm run build:setup && electron-builder --config electron-builder.setup.yml --config.extraMetadata.main=out/setup-launcher/main.js --publish never",
     "publicar": "node scripts/publicar-versao.js"
   },
   "dependencies": {

@@ -69,7 +69,7 @@ function desinstalar(): void {
     const menu = join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', PRODUTO)
     if (existsSync(menu)) rmSync(menu, { recursive: true, force: true })
     const desktop = join(process.env.USERPROFILE || '.', 'Desktop')
-    for (const nome of [`${PRODUTO}.lnk`, 'Servidor.lnk', 'Iniciar Servidor.lnk', 'Parar Servidor.lnk']) {
+    for (const nome of [`${PRODUTO}.lnk`, `${PRODUTO}-Servidor.lnk`, 'Servidor.lnk', 'Iniciar Servidor.lnk', 'Parar Servidor.lnk']) {
       const p = join(desktop, nome)
       if (existsSync(p)) rmSync(p, { force: true })
     }
@@ -242,7 +242,12 @@ async function iniciarServidorExterno(): Promise<boolean> {
   }
   try {
     const cwd = dirname(resolve(process.execPath))
-    const child = spawn(process.execPath, ['--servidor'], {
+    // Prefere NossoSistema-Servidor.exe se existir (auto-detecta --servidor
+    // pelo nome do exe). Fallback: o próprio app com --servidor (dev/antigo).
+    const srvExe = join(cwd, 'NossoSistema-Servidor.exe')
+    const serverExec = existsSync(srvExe) ? srvExe : process.execPath
+    const serverArgs = existsSync(srvExe) ? [] : ['--servidor']
+    const child = spawn(serverExec, serverArgs, {
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
@@ -472,6 +477,14 @@ function criarBandejaServidor(): void {
     { label: 'Encerrar servidor', click: () => app.quit() }
   ])
   bandeja.setContextMenu(menu)
+}
+
+// Auto-detect do executável do servidor: se o nome do binário for
+// "NossoSistema-Servidor" (ou o antigo "Servidor"), habilita o modo servidor
+// (--servidor) sem exigir flag na linha de comando.
+const exeName = basename(process.execPath, '.exe')
+if ((exeName === 'NossoSistema-Servidor' || exeName === 'Servidor') && !process.argv.includes('--servidor')) {
+  process.argv.push('--servidor')
 }
 
 // Single-instance lock: only for the GUI (non-servidor) mode.

@@ -60,6 +60,8 @@ asarUnpack:
 extraResources:
   - from: build/icones/servidor.ico
     to: servidor.ico
+  - from: build/icones/sistema.ico
+    to: sistema.ico
   - from: src/panel-servidor
     to: servidor-panel
 win:

@@ -30,7 +30,7 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: false
   createStartMenuShortcut: false
-  runAfterFinish: true
+  runAfterFinish: false
   deleteAppDataOnUninstall: false
   artifactName: NossoSistema-Setup.exe
   include: build/installer.nsh

@@ -104,9 +104,8 @@ const api = {
     inventarioCancelar: (dados: { inventario_id: number }) => ipcRenderer.invoke('estoque:inventarioCancelar', dados)
   },
   whatsapp: {
-    login: (user: string, password: string) => ipcRenderer.invoke('whatsapp:login', user, password),
-    get: (path: string, token: string) => ipcRenderer.invoke('whatsapp:get', path, token),
-    post: (path: string, body: unknown, token: string) => ipcRenderer.invoke('whatsapp:post', path, body, token),
+    get: (path: string) => ipcRenderer.invoke('whatsapp:get', path),
+    post: (path: string, body: unknown) => ipcRenderer.invoke('whatsapp:post', path, body),
     status: () => ipcRenderer.invoke('whatsapp:status')
   }
 }

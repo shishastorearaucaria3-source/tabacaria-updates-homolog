@@ -8,7 +8,9 @@ import {
   readFileSync,
   rmSync,
   readdirSync,
-  statSync
+  statSync,
+  renameSync,
+  copyFileSync
 } from 'node:fs'
 import { copyFile } from 'node:fs/promises'
 import { spawn, spawnSync, execSync } from 'node:child_process'
@@ -20,7 +22,9 @@ const APPDATA_DIR = 'sistema-loja-tabacaria'
 
 function gravarLogServidor(msg: string): void {
   try {
-    const logPath = join(pastaDadosApp(), 'servidor-inicio.log')
+    const dir = pastaDadosApp()
+    mkdirSync(dir, { recursive: true })
+    const logPath = join(dir, 'servidor-inicio.log')
     const line = `${new Date().toISOString()} ${msg}\n`
     writeFileSync(logPath, line, { flag: 'a', encoding: 'utf8' })
   } catch { /* ignore */ }
@@ -199,24 +203,31 @@ function caminhoEmbedded(): string {
   return join(process.resourcesPath, 'embedded')
 }
 
+// Após instalação, o app é NossoSistema.exe (o launcher foi substituído pela
+// cópia do app embutido). Busca esse executável diretamente.
 function exeApp(dir: string): string | null {
   try {
+    const nossoSistema = join(dir, 'NossoSistema.exe')
+    if (existsSync(nossoSistema)) return nossoSistema
     const nomesExe = readdirSync(dir).filter((f) => extname(f).toLowerCase() === '.exe')
-    // Prefere o executável da APLICAÇÃO real. O launcher (NossoSistema.exe) e
-    // o uninstaller (Uninstall *.exe) NUNCA são o alvo — só o app do sistema.
     const app = nomesExe.find(
       (f) =>
-        f.toLowerCase() !== 'nosso sistema.exe' &&
         f.toLowerCase() !== 'nos-sistema.exe' &&
-        !/^uninstall/i.test(f) &&
-        f.toLowerCase() !== basename(process.execPath).toLowerCase()
+        !/^uninstall/i.test(f)
     )
     if (app) return join(dir, app)
-    for (const f of nomesExe) {
-      if (f.toLowerCase() !== basename(process.execPath).toLowerCase() && !/^uninstall/i.test(f)) {
-        return join(dir, f)
-      }
-    }
+  } catch { /* ignore */ }
+  return null
+}
+
+// Retorna o executável do Servidor (NossoSistema-Servidor.exe) se existir na
+// pasta. Aceita também o nome antigo (Servidor.exe) apenas para compatibilidade.
+function exeServidor(dir: string): string | null {
+  try {
+    const srv = join(dir, 'NossoSistema-Servidor.exe')
+    if (existsSync(srv)) return srv
+    const antigo = join(dir, 'Servidor.exe')
+    if (existsSync(antigo)) return antigo
   } catch { /* ignore */ }
   return null
 }
@@ -240,18 +251,18 @@ function criarAtalho(nome: string, alvo: string, pastaLnk: string, icone?: strin
 }
 
 // Remove atalhos técnicos antigos que o próprio sistema criou em versões
-// anteriores (Iniciar/Parar Servidor, Servidor separado). Mantém apenas os
-// dois oficiais: "NossoSistema" e "NossoSistema Servidor".
+// anteriores. Os atalhos oficiais novos são: "NossoSistema" e "Servidor".
 function limparAtalhosAntigos(): void {
   const desktop = join(process.env.USERPROFILE || '.', 'Desktop')
   const menu = join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', PRODUTO)
   const antigos = [
     'Servidor.lnk',
+    'NossoSistema-Servidor.lnk',
     'Iniciar Servidor.lnk',
     'Parar Servidor.lnk',
     'Sistema Loja Tabacaria.lnk',
     'NossoSistema Setup.lnk',
-    'NossoSistema-Servidor.lnk'
+    'NossoSistema Servidor.lnk'
   ]
   for (const nome of antigos) {
     for (const pasta of [desktop, menu]) {
@@ -268,27 +279,37 @@ function limparAtalhosAntigos(): void {
   } catch { /* ignore */ }
 }
 
-// Cria SOMENTE os dois atalhos oficiais:
-//   - "NossoSistema" → abre o sistema/PDV (sem flag)
-//   - "NossoSistema Servidor" → abre o painel do servidor (--servidor --abrir-painel)
-function criarAtalhos(dir: string, exe: string): void {
+// Cria atalhos com base no tipo de instalação:
+//   - "cliente": apenas "NossoSistema" (PDV/sistema)
+//   - "servidor": "NossoSistema" + "Servidor" (cada um com seu executável)
+function criarAtalhos(dir: string, tipo: string): void {
   limparAtalhosAntigos()
   const desktop = join(process.env.USERPROFILE || '.', 'Desktop')
   const menu = join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', PRODUTO)
   const iconeSistema = join(dir, 'resources', 'sistema.ico')
   const iconeServidor = join(dir, 'resources', 'servidor.ico')
-  // NossoSistema (PDV) — sem argumentos; ícone do sistema se disponível, senão o exe.
-  criarAtalho(PRODUTO, exe, desktop, existsSync(iconeSistema) ? iconeSistema : exe)
-  criarAtalho(PRODUTO, exe, menu, existsSync(iconeSistema) ? iconeSistema : exe)
-  // NossoSistema Servidor — painel do servidor (abre a interface, não só bandeja)
-  const args = '--servidor --abrir-painel'
-  criarAtalho(`${PRODUTO} Servidor`, exe, desktop, existsSync(iconeServidor) ? iconeServidor : exe, args)
-  criarAtalho(`${PRODUTO} Servidor`, exe, menu, existsSync(iconeServidor) ? iconeServidor : exe, args)
+
+  // NossoSistema (PDV) — executável NossoSistema.exe, sem argumentos
+  const exe = exeApp(dir)
+  if (exe) {
+    criarAtalho(PRODUTO, exe, desktop, existsSync(iconeSistema) ? iconeSistema : exe)
+    criarAtalho(PRODUTO, exe, menu, existsSync(iconeSistema) ? iconeSistema : exe)
+  }
+
+  // Servidor — executável separado NossoSistema-Servidor.exe (auto-detecta
+  // --servidor pelo nome), com ícone e atalho próprios.
+  if (tipo === 'servidor') {
+    const srv = exeServidor(dir) || exe
+    if (srv) {
+      criarAtalho('NossoSistema-Servidor', srv, desktop, existsSync(iconeServidor) ? iconeServidor : srv)
+      criarAtalho('NossoSistema-Servidor', srv, menu, existsSync(iconeServidor) ? iconeServidor : srv)
+    }
+  }
 }
 
 function registrarServidor(dir: string): void {
-  const exe = exeApp(dir)
-  if (!exe) return
+  const srv = exeServidor(dir) || exeApp(dir)
+  if (!srv) return
   // Migração: remove autostart antigo via .vbs (versões anteriores)
   try {
     const vbsAntigo = join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', `${PRODUTO}-servidor.vbs`)
@@ -296,11 +317,11 @@ function registrarServidor(dir: string): void {
   } catch { /* ignore */ }
   const chaveRun = `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run`
   try {
-    execSync(`reg add "${chaveRun}" /v "${PRODUTO} Servidor" /d "\\"${exe}\\" --servidor" /f`, { windowsHide: true })
+    execSync(`reg add "${chaveRun}" /v "${PRODUTO} Servidor" /d "\\"${srv}\\"" /f`, { windowsHide: true })
   } catch { /* ignore */ }
   try {
     execSync(
-      `netsh advfirewall firewall add rule name="${PRODUTO} Servidor" dir=in action=allow program="${exe}" enable=yes`,
+      `netsh advfirewall firewall add rule name="${PRODUTO} Servidor" dir=in action=allow program="${srv}" enable=yes`,
       { windowsHide: true }
     )
   } catch { /* sem admin: firewall não configurado */ }
@@ -364,6 +385,11 @@ async function instalar(args: { tipo: string }): Promise<{ ok: boolean; erro?: s
     return { ok: false, erro: 'Componentes do sistema não encontrados no instalador.' }
   }
 
+  // Tenta criar o diretório de instalação antes de verificar gravabilidade.
+  // Sem isso, dirGravavel() retornaria false em diretórios inexistentes (ex.:
+  // C:\NossoSistema em instalação nova), causando loop infinito de elevação UAC.
+  try { mkdirSync(dir, { recursive: true }) } catch { /* elevação será necessária */ }
+
   // Se a pasta de instalação escolhida (ex.: C:\NossoSistema criada por admin)
   // não for gravável pelo processo atual, relança o launcher ELEVADO (UAC) para
   // conseguir copiar os arquivos e conceder a ACL ao usuário. Sem isso a cópia
@@ -389,6 +415,16 @@ async function instalar(args: { tipo: string }): Promise<{ ok: boolean; erro?: s
       const win = BrowserWindow.getAllWindows()[0]
       if (win) win.webContents.send('setup:progresso', { etapa: 'aplicativo', arquivos: n, total, atual })
     })
+
+    // Renomeia o executável do app embutido (Sistema Loja Tabacaria.exe) para
+    // NossoSistema.exe. O launcher (que é o próprio processo atual) é
+    // substituído — isso é seguro pois o processo continua em memória.
+    const nomeAntigo = join(dir, 'Sistema Loja Tabacaria.exe')
+    const nomeNovo = join(dir, 'NossoSistema.exe')
+    try {
+      if (existsSync(nomeAntigo)) renameSync(nomeAntigo, nomeNovo)
+    } catch { /* pode falhar se já for NossoSistema.exe */ }
+
     gravarLogServidor('[setup] cópia concluída, copiando autoupdate')
     const autoupdateSrc = join(process.resourcesPath, 'autoupdate')
     if (existsSync(autoupdateSrc)) {
@@ -413,12 +449,9 @@ async function instalar(args: { tipo: string }): Promise<{ ok: boolean; erro?: s
     )
     gravarLogServidor('[setup] instalacao.json gravado')
     gravarRegistro(dir, args.tipo)
-    const exe = exeApp(dir)
-    if (exe) {
-      criarAtalhos(dir, exe)
-    }
+    criarAtalhos(dir, args.tipo)
     gravarLogServidor('[setup] instalação OK')
-    return { ok: true, dir, exe: exe || undefined }
+    return { ok: true, dir, exe: exeApp(dir) || undefined }
   } catch (e) {
     const err = e as Error
     gravarLogServidor(`[setup] ERRO instalação: ${err.message}\n${err.stack}`)
@@ -437,7 +470,7 @@ async function desinstalar(dir: string): Promise<{ ok: boolean; erro?: string }>
     const menu = join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', PRODUTO)
     if (existsSync(menu)) rmSync(menu, { recursive: true, force: true })
     const desktop = join(process.env.USERPROFILE || '.', 'Desktop')
-    for (const nome of [`${PRODUTO}.lnk`, `${PRODUTO} Servidor.lnk`, 'Servidor.lnk', 'Iniciar Servidor.lnk', 'Parar Servidor.lnk', 'Sistema Loja Tabacaria.lnk']) {
+    for (const nome of [`${PRODUTO}.lnk`, `${PRODUTO}-Servidor.lnk`, `${PRODUTO} Servidor.lnk`, 'Servidor.lnk', 'Iniciar Servidor.lnk', 'Parar Servidor.lnk', 'Sistema Loja Tabacaria.lnk']) {
       const p = join(desktop, nome)
       if (existsSync(p)) rmSync(p, { force: true })
     }

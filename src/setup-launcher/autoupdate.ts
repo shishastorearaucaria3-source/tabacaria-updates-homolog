@@ -165,12 +165,10 @@ async function runAutoupdate(): Promise<void> {
     }, null, 2), 'utf8');
     gravarRegistro(installDir, tipoFinal, versaoEsperada);
 
-    const exe = exeApp(installDir);
-    if (exe) {
-      criarAtalhos(installDir, exe);
-    }
+    criarAtalhos(installDir, tipoFinal);
 
     gravarLogServidor('[autoupdate] Relançando aplicação...');
+    const exe = exeApp(installDir);
     if (exe) relançarApp(exe);
 
     gravarLogServidor('[autoupdate] Aguardando inicialização...');
