@@ -1,4 +1,4 @@
-import { join, basename, extname, dirname, resolve } from 'node:path';
+﻿import { join, basename, extname, dirname, resolve } from 'node:path';
 import {
   existsSync,
   mkdirSync,
@@ -24,7 +24,7 @@ export function dirPadrao(): string {
 
 export function pastaDadosApp(): string {
   if (process.env.SETUP_DADOS_DIR) return process.env.SETUP_DADOS_DIR;
-  return join(process.env.APPDATA || join(process.env.USERPROFILE || '.', 'AppData', 'Roaming'), APPDATA_DIR);
+  return join(dirname(resolve(process.execPath)), APPDATA_DIR);
 }
 
 export function exeApp(dir: string): string | null {
@@ -283,19 +283,43 @@ export function criarAtalho(nome: string, alvo: string, pastaLnk: string, icone?
   } catch { /* ignore */ }
 }
 
-export function criarAtalhos(dir: string, exe: string): void {
+// Remove atalhos técnicos antigos que o próprio sistema criou em versões
+// anteriores. Mantém apenas os dois oficiais: "NossoSistema" e "NossoSistema Servidor".
+export function limparAtalhosAntigos(): void {
   const desktop = join(process.env.USERPROFILE || '.', 'Desktop');
   const menu = join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', PRODUTO);
-  criarAtalho(PRODUTO, exe, desktop, exe);
-  criarAtalho(PRODUTO, exe, menu, exe);
+  const antigos = [
+    'Servidor.lnk',
+    'Iniciar Servidor.lnk',
+    'Parar Servidor.lnk',
+    'Sistema Loja Tabacaria.lnk',
+    'NossoSistema Setup.lnk',
+    'NossoSistema-Servidor.lnk'
+  ];
+  for (const nome of antigos) {
+    for (const pasta of [desktop, menu]) {
+      try {
+        const p = join(pasta, nome);
+        if (existsSync(p)) rmSync(p, { force: true });
+      } catch { /* ignore */ }
+    }
+  }
 }
 
-export function criarAtalhoServidor(dir: string, exe: string): void {
+// Cria SOMENTE os dois atalhos oficiais:
+//   - "NossoSistema" → sistema/PDV (sem flag)
+//   - "NossoSistema Servidor" → painel do servidor (--servidor --abrir-painel)
+export function criarAtalhos(dir: string, exe: string): void {
+  limparAtalhosAntigos();
   const desktop = join(process.env.USERPROFILE || '.', 'Desktop');
   const menu = join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', PRODUTO);
-  criarAtalho('Servidor', exe, desktop, exe, '--servidor');
-  criarAtalho('Iniciar Servidor', exe, menu, exe, '--servidor');
-  criarAtalho('Parar Servidor', exe, menu, exe, '--parar-servidor');
+  const iconeSistema = join(dir, 'resources', 'sistema.ico');
+  const iconeServidor = join(dir, 'resources', 'servidor.ico');
+  criarAtalho(PRODUTO, exe, desktop, existsSync(iconeSistema) ? iconeSistema : exe);
+  criarAtalho(PRODUTO, exe, menu, existsSync(iconeSistema) ? iconeSistema : exe);
+  const args = '--servidor --abrir-painel';
+  criarAtalho(`${PRODUTO} Servidor`, exe, desktop, existsSync(iconeServidor) ? iconeServidor : exe, args);
+  criarAtalho(`${PRODUTO} Servidor`, exe, menu, existsSync(iconeServidor) ? iconeServidor : exe, args);
 }
 
 export function relançarApp(exe: string): void {
@@ -305,6 +329,7 @@ export function relançarApp(exe: string): void {
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
+      env: { ...process.env, SETUP_DADOS_DIR: pastaDadosApp() }
     });
     filho.on('error', (e) => console.error('[autoupdate] falha ao abrir sistema:', e.message));
     filho.unref();

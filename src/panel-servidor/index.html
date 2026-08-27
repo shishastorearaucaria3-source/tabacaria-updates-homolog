@@ -191,7 +191,7 @@ document.querySelectorAll('.menu-item').forEach(b=>b.addEventListener('click',()
 document.getElementById('btnMinimizar').addEventListener('click',()=>{ try { window.servidorJanela.minimizar() } catch {} })
 document.getElementById('btnSair').addEventListener('click',()=>{
   abrirModal('<h3>Encerrar servidor</h3><p>Tem certeza que deseja encerrar o servidor? O sistema ficará sem conexão.</p><div class="modal-acoes"><button data-cancela>Cancelar</button><button data-confirma class="perigo">Encerrar</button></div>',
-    async ()=>{ try{ await fetch(baseUrl+'/api/servidor/encerrar',{method:'POST'}) }catch(e){} ; try { window.servidorJanela.fechar() } catch(e2) { window.close() } })
+    async ()=>{ try{ await fetch(baseUrl+'/api/servidor/encerrar',{method:'POST'}) }catch(e){} ; try { window.servidorJanela.encerrar() } catch(e2) { window.close() } })
 })
 
 // ---------- Telas ----------

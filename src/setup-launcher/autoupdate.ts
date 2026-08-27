@@ -13,7 +13,6 @@ import {
   gravarConfigServidor,
   removerServidorAutostart,
   criarAtalhos,
-  criarAtalhoServidor,
   relançarApp,
   concederAclUsuarioAtual,
   estaElevado,
@@ -169,7 +168,6 @@ async function runAutoupdate(): Promise<void> {
     const exe = exeApp(installDir);
     if (exe) {
       criarAtalhos(installDir, exe);
-      if (tipoFinal === 'servidor') criarAtalhoServidor(installDir, exe);
     }
 
     gravarLogServidor('[autoupdate] Relançando aplicação...');

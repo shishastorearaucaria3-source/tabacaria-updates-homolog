@@ -2,7 +2,7 @@ import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { readFile, writeFile } from 'node:fs/promises'
 import { extname } from 'node:path'
 import * as XLSX from 'xlsx'
-import { servidorClient, obterIpsRede, configurarConexaoServidor, testarServidor, getServidorUrl, temChaveApiGravada } from './servidor'
+import { servidorClient, obterIpsRede, configurarConexaoServidor, testarServidor, getServidorUrl, definirSessao, limparSessao, descobrirServidor } from './servidor'
 
 export interface Sessao {
   id: number
@@ -37,16 +37,31 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle('auth:login', async (_e, login: string, senha: string) => {
     const res = await servidorClient.authLogin(login, senha)
-    if (res.ok && res.usuario) sessaoAtual = res.usuario
+    if (res.ok && res.usuario) {
+      sessaoAtual = res.usuario
+      if (res.token) definirSessao(res.token)
+    }
     return res
   })
 
-  ipcMain.handle('auth:logout', () => {
+  ipcMain.handle('auth:logout', async () => {
     sessaoAtual = null
+    try { await servidorClient.authLogout() } catch { /* servidor indisponível */ }
+    limparSessao()
   })
 
   ipcMain.handle('auth:session', () => {
     return sessaoAtual
+  })
+
+  ipcMain.handle('auth:usuarios', async () => {
+    // Lista pública de usuários para a tela de login (id/nome/login/perfil).
+    // Não requer sessão — acessível na LAN como o ping.
+    try {
+      return await servidorClient.authUsuarios()
+    } catch {
+      return []
+    }
   })
 
   ipcMain.handle('auth:criarUsuario', (_e, dados: { nome: string; login: string; senha: string; perfil: string; comissao: number }) => {
@@ -354,17 +369,17 @@ export function registerDbHandlers(): void {
     return {
       ips: obterIpsRede(),
       url,
-      local: url.startsWith('http://localhost'),
-      // Se o terminal já tem a chave de API gravada (servidor.key), há uma
-      // conexão de rede configurada — o login pode carregar usuários no mount.
-      // Sem chave, NADA de dados é buscado até o usuário configurar a conexão.
-      temChave: temChaveApiGravada()
+      local: url.startsWith('http://localhost')
     }
   })
 
-  ipcMain.handle('servidor:configurarConexao', async (_e, opcoes: { local?: boolean; ip?: string; url?: string; apiKey?: string }) => {
+  ipcMain.handle('servidor:configurarConexao', async (_e, opcoes: { local?: boolean; ip?: string; url?: string }) => {
     const r = configurarConexaoServidor(opcoes ?? {})
     return { ok: true, url: r.url, ips: r.ips }
+  })
+
+  ipcMain.handle('servidor:descobrir', async () => {
+    return descobrirServidor()
   })
 
   ipcMain.handle('db:transacao', (_e, statements: { sql: string; params?: unknown[] }[]) => {
@@ -409,5 +424,18 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle('estoque:inventarioCancelar', (_e, dados: { inventario_id: number }) => {
     return servidorClient.estoqueInventarioCancelar(dados ?? { inventario_id: 0 })
+  })
+
+  ipcMain.handle('whatsapp:login', (_e, user: string, password: string) => {
+    return servidorClient.whatsapp.login(user, password)
+  })
+  ipcMain.handle('whatsapp:get', (_e, path: string, token: string) => {
+    return servidorClient.whatsapp.get(path, token)
+  })
+  ipcMain.handle('whatsapp:post', (_e, path: string, body: unknown, token: string) => {
+    return servidorClient.whatsapp.post(path, body, token)
+  })
+  ipcMain.handle('whatsapp:status', () => {
+    return servidorClient.whatsappStatus()
   })
 }

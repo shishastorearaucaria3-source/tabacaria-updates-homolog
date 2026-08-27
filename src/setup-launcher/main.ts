@@ -1,5 +1,5 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
-import { join, basename, extname, relative, dirname } from 'node:path'
+﻿import { app, BrowserWindow, ipcMain } from 'electron'
+import { join, basename, extname, relative, dirname, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
   existsSync,
@@ -65,7 +65,7 @@ function dirPadrao(): string {
 
 function pastaDadosApp(): string {
   if (process.env.SETUP_DADOS_DIR) return process.env.SETUP_DADOS_DIR
-  return join(process.env.APPDATA || join(process.env.USERPROFILE || '.', 'AppData', 'Roaming'), APPDATA_DIR)
+  return join(dirname(resolve(process.execPath)), APPDATA_DIR)
 }
 
 interface Instalacao {
@@ -239,19 +239,21 @@ function criarAtalho(nome: string, alvo: string, pastaLnk: string, icone?: strin
   } catch { /* ignore */ }
 }
 
-function criarAtalhos(dir: string, exe: string): void {
+// Remove atalhos técnicos antigos que o próprio sistema criou em versões
+// anteriores (Iniciar/Parar Servidor, Servidor separado). Mantém apenas os
+// dois oficiais: "NossoSistema" e "NossoSistema Servidor".
+function limparAtalhosAntigos(): void {
   const desktop = join(process.env.USERPROFILE || '.', 'Desktop')
   const menu = join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', PRODUTO)
-  const icone = join(dir, 'resources', 'icone.ico')
-  criarAtalho(PRODUTO, exe, desktop, icone)
-  criarAtalho(PRODUTO, exe, menu, icone)
-}
-
-function criarAtalhoServidor(dir: string, exe: string): void {
-  const desktop = join(process.env.USERPROFILE || '.', 'Desktop')
-  const menu = join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', PRODUTO)
-  // Remove atalhos antigos (versões que tinham Iniciar/Parar separados)
-  for (const nome of ['Iniciar Servidor.lnk', 'Parar Servidor.lnk']) {
+  const antigos = [
+    'Servidor.lnk',
+    'Iniciar Servidor.lnk',
+    'Parar Servidor.lnk',
+    'Sistema Loja Tabacaria.lnk',
+    'NossoSistema Setup.lnk',
+    'NossoSistema-Servidor.lnk'
+  ]
+  for (const nome of antigos) {
     for (const pasta of [desktop, menu]) {
       try {
         const p = join(pasta, nome)
@@ -259,14 +261,29 @@ function criarAtalhoServidor(dir: string, exe: string): void {
       } catch { /* ignore */ }
     }
   }
+  // Arquivos auxiliares antigos que não devem existir como "aplicativos"
   try {
-    const ps1 = join(dir, 'parar-servidor.ps1')
+    const ps1 = join(dirPadrao(), 'parar-servidor.ps1')
     if (existsSync(ps1)) rmSync(ps1, { force: true })
   } catch { /* ignore */ }
-  const icone = join(dir, 'resources', 'servidor.ico')
-  // Abre o servidor com bandeja (ícone próprio). Fechar = menu "Encerrar servidor".
-  criarAtalho('Servidor', exe, desktop, icone, '--servidor')
-  criarAtalho('Servidor', exe, menu, icone, '--servidor')
+}
+
+// Cria SOMENTE os dois atalhos oficiais:
+//   - "NossoSistema" → abre o sistema/PDV (sem flag)
+//   - "NossoSistema Servidor" → abre o painel do servidor (--servidor --abrir-painel)
+function criarAtalhos(dir: string, exe: string): void {
+  limparAtalhosAntigos()
+  const desktop = join(process.env.USERPROFILE || '.', 'Desktop')
+  const menu = join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', PRODUTO)
+  const iconeSistema = join(dir, 'resources', 'sistema.ico')
+  const iconeServidor = join(dir, 'resources', 'servidor.ico')
+  // NossoSistema (PDV) — sem argumentos; ícone do sistema se disponível, senão o exe.
+  criarAtalho(PRODUTO, exe, desktop, existsSync(iconeSistema) ? iconeSistema : exe)
+  criarAtalho(PRODUTO, exe, menu, existsSync(iconeSistema) ? iconeSistema : exe)
+  // NossoSistema Servidor — painel do servidor (abre a interface, não só bandeja)
+  const args = '--servidor --abrir-painel'
+  criarAtalho(`${PRODUTO} Servidor`, exe, desktop, existsSync(iconeServidor) ? iconeServidor : exe, args)
+  criarAtalho(`${PRODUTO} Servidor`, exe, menu, existsSync(iconeServidor) ? iconeServidor : exe, args)
 }
 
 function registrarServidor(dir: string): void {
@@ -399,7 +416,6 @@ async function instalar(args: { tipo: string }): Promise<{ ok: boolean; erro?: s
     const exe = exeApp(dir)
     if (exe) {
       criarAtalhos(dir, exe)
-      if (args.tipo === 'servidor') criarAtalhoServidor(dir, exe)
     }
     gravarLogServidor('[setup] instalação OK')
     return { ok: true, dir, exe: exe || undefined }
@@ -417,10 +433,11 @@ async function desinstalar(dir: string): Promise<{ ok: boolean; erro?: string }>
   try {
     await esperarAppFechado(dir)
     removerServidorAutostart()
+    limparAtalhosAntigos()
     const menu = join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', PRODUTO)
     if (existsSync(menu)) rmSync(menu, { recursive: true, force: true })
     const desktop = join(process.env.USERPROFILE || '.', 'Desktop')
-    for (const nome of [`${PRODUTO}.lnk`, 'Servidor.lnk', 'Iniciar Servidor.lnk', 'Parar Servidor.lnk']) {
+    for (const nome of [`${PRODUTO}.lnk`, `${PRODUTO} Servidor.lnk`, 'Servidor.lnk', 'Iniciar Servidor.lnk', 'Parar Servidor.lnk', 'Sistema Loja Tabacaria.lnk']) {
       const p = join(desktop, nome)
       if (existsSync(p)) rmSync(p, { force: true })
     }
@@ -492,7 +509,8 @@ function relançarApp(exe: string): void {
       cwd: dirname(exe),
       detached: true,
       stdio: 'ignore',
-      windowsHide: true
+      windowsHide: true,
+      env: { ...process.env, SETUP_DADOS_DIR: pastaDadosApp() }
     })
     filho.on('error', (e) => console.error('[setup] falha ao abrir sistema:', e.message))
     filho.unref()
@@ -502,8 +520,14 @@ function relançarApp(exe: string): void {
 }
 
 function finalizarSilencioso(resultado: { ok: boolean; exe?: string }): void {
-  if (resultado.ok && resultado.exe) relançarApp(resultado.exe)
-  app.exit(resultado.ok ? 0 : 1)
+  if (resultado.ok && resultado.exe) {
+    relançarApp(resultado.exe)
+    // Give the child process time to start and acquire its own single-instance
+    // lock before the launcher exits and releases its resources.
+    setTimeout(() => app.exit(0), 3000)
+  } else {
+    app.exit(resultado.ok ? 0 : 1)
+  }
 }
 
 function iniciarFluxoSilencioso(): void {
@@ -599,30 +623,25 @@ function registrarIpc(): void {
   })
 }
 
-const single = app.requestSingleInstanceLock()
-if (!single) {
-  app.quit()
-} else {
-  app.on('second-instance', () => {
-    const win = BrowserWindow.getAllWindows()[0]
-    if (win) win.focus()
-  })
-  app.whenReady().then(() => {
-    registrarIpc()
-    if (process.env.SETUP_TEST_INSTALL) {
-      const args = { tipo: process.env.SETUP_TEST_TIPO || 'servidor', enderecoServidor: process.env.SETUP_TEST_ENDERECO }
-      instalar(args)
-        .then((r) => {
-          console.log('[setup:teste]', JSON.stringify(r))
-          app.exit(r.ok ? 0 : 1)
-        })
-        .catch(() => app.exit(1))
-      return
-    }
-    if (/\/S\b/.test(process.argv.join(' ')) || /--silent/.test(process.argv.join(' '))) {
-      iniciarFluxoSilencioso()
-    } else {
-      criarJanela()
-    }
-  })
-}
+// The setup launcher is a one-shot installer/updater. It does NOT need a
+// single-instance lock — in fact, holding one causes a race condition when
+// relançarApp() spawns the main app (which also requests the lock). Since
+// the launcher exits right after spawning, we simply omit the lock.
+app.whenReady().then(() => {
+  registrarIpc()
+  if (process.env.SETUP_TEST_INSTALL) {
+    const args = { tipo: process.env.SETUP_TEST_TIPO || 'servidor', enderecoServidor: process.env.SETUP_TEST_ENDERECO }
+    instalar(args)
+      .then((r) => {
+        console.log('[setup:teste]', JSON.stringify(r))
+        app.exit(r.ok ? 0 : 1)
+      })
+      .catch(() => app.exit(1))
+    return
+  }
+  if (/\/S\b/.test(process.argv.join(' ')) || /--silent/.test(process.argv.join(' '))) {
+    iniciarFluxoSilencioso()
+  } else {
+    criarJanela()
+  }
+})

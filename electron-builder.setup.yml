@@ -1,4 +1,4 @@
-appId: br.com.lojatabacaria.setup
+﻿appId: br.com.lojatabacaria.setup
 productName: NossoSistema
 directories:
   output: dist-setup
@@ -14,8 +14,13 @@ extraResources:
     to: autoupdate/autoupdate.js
   - from: out/autoupdate/autoupdate-shared.js
     to: autoupdate/autoupdate-shared.js
+  - from: build/icones/servidor.ico
+    to: servidor.ico
+  - from: src/panel-servidor
+    to: servidor-panel
 win:
   icon: build/icones/sistema.png
+  signExecutable: false
   target:
     - nsis
 nsis:

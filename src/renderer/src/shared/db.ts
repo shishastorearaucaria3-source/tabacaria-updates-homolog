@@ -51,6 +51,7 @@ export interface AuthApi {
   login: (login: string, senha: string) => Promise<{ ok: boolean; erro?: string; usuario?: Usuario }>
   logout: () => Promise<void>
   session: () => Promise<Usuario | null>
+  usuarios: () => Promise<{ id: number; nome: string; login: string; perfil: string }[]>
   criarUsuario: (dados: {
     nome: string
     login: string
@@ -185,8 +186,9 @@ export interface ServidorApi {
   corrigir: () => Promise<{ ok: boolean; correcoes: string[] }>
   zerar: (alvos: string[]) => Promise<{ ok: boolean; removidos: string[]; erro?: string }>
   restaurar: () => Promise<{ ok: boolean; erro?: string }>
-  conexao: () => Promise<{ ips: string[]; url: string; local: boolean; temChave?: boolean }>
-  configurarConexao: (opcoes: { local?: boolean; ip?: string; url?: string; apiKey?: string }) => Promise<{ ok: boolean; url: string; ips: string[] }>
+  conexao: () => Promise<{ ips: string[]; url: string; local: boolean }>
+  descobrir: () => Promise<{ servidores: string[]; porta: number }>
+  configurarConexao: (opcoes: { local?: boolean; ip?: string; url?: string }) => Promise<{ ok: boolean; url: string; ips: string[] }>
   testar: () => Promise<{ ok: boolean; url: string; erro?: string }>
   apiKeyGet: () => Promise<{ ok: boolean; api_key: string }>
   apiKeyRegenerar: () => Promise<{ ok: boolean; api_key: string }>
@@ -267,4 +269,16 @@ export interface EstoqueApi {
 export function getEstoqueApi(): EstoqueApi {
   const win = window as unknown as { api: { estoque: EstoqueApi } }
   return win.api.estoque
+}
+
+export interface WhatsAppApi {
+  login: (user: string, password: string) => Promise<{ ok: boolean; token?: string; error?: string }>
+  get: (path: string, token: string) => Promise<Record<string, unknown>>
+  post: (path: string, body: unknown, token: string) => Promise<Record<string, unknown>>
+  status: () => Promise<{ ok: boolean; running: boolean; configured: boolean }>
+}
+
+export function getWhatsAppApi(): WhatsAppApi {
+  const win = window as unknown as { api: { whatsapp: WhatsAppApi } }
+  return win.api.whatsapp
 }

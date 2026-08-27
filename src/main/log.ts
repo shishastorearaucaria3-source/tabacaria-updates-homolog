@@ -1,16 +1,11 @@
-import { writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-
-function caminhoLogServidor(): string {
-  return join(
-    process.env.APPDATA || join(process.env.USERPROFILE || '.', 'AppData', 'Roaming'),
-    'sistema-loja-tabacaria',
-    'servidor-inicio.log'
-  )
-}
+﻿import { writeFileSync, mkdirSync } from 'node:fs'
+import { dirname } from 'node:path'
+import { getLogFilePath } from '../shared/data-dir'
 
 export function gravarLogServidor(m: string): void {
   try {
-    writeFileSync(caminhoLogServidor(), `${new Date().toISOString()} ${m}\n`, { flag: 'a' })
+    const file = getLogFilePath()
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, `${new Date().toISOString()} ${m}\n`, { flag: 'a' })
   } catch { /* ignore */ }
 }

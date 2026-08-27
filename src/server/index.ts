@@ -1,4 +1,4 @@
-import { DatabaseSync } from 'node:sqlite'
+﻿import { DatabaseSync } from 'node:sqlite'
 import { createHash, randomBytes } from 'node:crypto'
 import { join, resolve, sep } from 'node:path'
 import { mkdirSync, existsSync, copyFileSync, readdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
@@ -8,10 +8,13 @@ import type { Server } from 'node:http'
 import { networkInterfaces } from 'node:os'
 import { migrations, SCHEMA_VERSION } from '../shared/schema'
 import { encontrarZona, Zona } from '../shared/geo'
+import { getDefaultDbPath, getPortFilePath } from '../shared/data-dir'
+export { getDefaultDbPath }
 import { getConfig, salvarConfig, getStatus, sincronizarAgora, testarConexao, temInternet, notificarAlteracaoProduto, getExibicao, salvarExibicao, backupConfigCatalogo, getBackupConfigCatalogo, restaurarBackupConfigCatalogo } from './catalogo'
 import { getStatusServidor, getLogs, limparLogs, getBackupInfo, diagnosticar, corrigir, zerarDados, restaurarBackup, registrarLog, versaoSistema } from './servidor'
 import { extrairZip, listarArquivosImportacao, lerArquivoImportacao, importarProdutos, limparPastaImportacao, getProgressoImportacao } from './importar'
 import { importarNex, getProgressoNex, analisarNex } from './importar-nex'
+import { registerWhatsAppRoutes, stopWhatsApp } from '../whatsapp/index'
 import bcrypt from 'bcryptjs'
 
 function notificarProdutoSeNecessario(sql: string, params: unknown[]): void {
@@ -39,17 +42,6 @@ export function getDb(): DatabaseSync {
   if (!db) throw new Error('DB not initialized')
   return db
 }
-
-function getDefaultDbPath(): string {
-  const base =
-    process.env.TABACARIA_DB ||
-    (process.platform === 'win32'
-      ? join(process.env.APPDATA || join(process.env.USERPROFILE || '.', 'AppData', 'Roaming'), 'sistema-loja-tabacaria', 'tabacaria.sqlite')
-      : join(process.env.HOME || '.', '.sistema-loja-tabacaria', 'tabacaria.sqlite'))
-  return base
-}
-
-export { getDefaultDbPath }
 
 export function reabrirBanco(): DatabaseSync {
   const path = getDefaultDbPath()
@@ -250,12 +242,7 @@ export function getIpRede(): string {
 }
 
 function caminhoArquivoPorta(): string {
-  const base =
-    process.env.TABACARIA_DB ||
-    (process.platform === 'win32'
-      ? join(process.env.APPDATA || join(process.env.USERPROFILE || '.', 'AppData', 'Roaming'), 'sistema-loja-tabacaria')
-      : join(process.env.HOME || '.', '.sistema-loja-tabacaria'))
-  return join(base, 'servidor.porta')
+  return getPortFilePath()
 }
 
 function gravarPorta(porta: number): void {
@@ -293,23 +280,67 @@ export function iniciarServidor(porta = 3210): void {
     res.status(403).json({ erro: 'Acesso permitido apenas na rede local.' })
   })
 
-  // Ping público (dentro da LAN) — permite testar conexão ANTES de configurar a chave.
+  // Ping público (dentro da LAN) — permite testar conexão e descoberta.
   app.get('/api/ping', (_req, res) => {
     res.json({ ok: true })
   })
 
-  // Autenticação: loopback (aplicativo no próprio servidor) tem acesso integral;
-  // qualquer outro terminal da rede precisa apresentar a chave de API.
+  // Sessões de login em memória: o terminal autentica com usuário/senha e recebe
+  // um token de sessão aleatório. Nenhuma API Key manual é exigida do terminal —
+  // a autenticação real passa a ser o login de usuário (admin/operador).
+  const sessoes = new Map<string, { usuario_id: number; login: string; perfil: string; criado_em: number }>()
+  const VALIDADE_SESSAO_MS = 12 * 60 * 60 * 1000
+
+  function gerarTokenSessao(): string {
+    return randomBytes(32).toString('hex')
+  }
+
+  function limparSessoesExpiradas(): void {
+    const agora = Date.now()
+    for (const [t, s] of sessoes) {
+      if (agora - s.criado_em > VALIDADE_SESSAO_MS) sessoes.delete(t)
+    }
+  }
+
+  // Lista básica de usuários para a tela de login (apenas id/nome/login/perfil —
+  // nunca senhas nem dados sensíveis). Acessível na LAN para o terminal montar a
+  // lista de seleção antes de autenticar.
+  app.get('/api/auth/usuarios', (_req, res) => {
+    const rows = database
+      .prepare(`SELECT id, nome, login, perfil FROM usuarios WHERE ativo = 1 ORDER BY nome`)
+      .all() as { id: number; nome: string; login: string; perfil: string }[]
+    res.json(rows)
+  })
+
+  // Autenticação por SESSÃO DE LOGIN: loopback (aplicativo no próprio servidor)
+  // tem acesso integral; qualquer terminal da rede precisa de um token de sessão
+  // obtido via /api/auth/login. Rotas marcadas como públicas (ping, versao,
+  // auth/usuarios, auth/login, config, catálogo de leitura) não passam por aqui.
   // Override de TESTE (TABACARIA_TEST_FORCE_REMOTE=1): trata toda requisição
   // como remota para exercitar o fluxo de autenticação deterministicamente.
   const forcarRemoto = process.env.TABACARIA_TEST_FORCE_REMOTE === '1'
   const ehLocalEfetivo = (req: express.Request): boolean => !forcarRemoto && localReq(req)
+  const ROTAS_PUBLICAS = new Set([
+    '/api/ping',
+    '/api/versao',
+    '/api/auth/usuarios',
+    '/api/auth/login',
+    '/api/config',
+    '/api/catalogo/status',
+    '/api/catalogo/config',
+    '/api/catalogo/exibicao',
+    '/api/zonas',
+    '/api/taxa'
+  ])
   app.use((req, res, next) => {
     if (ehLocalEfetivo(req)) { next(); return }
-    const chave = String(req.get('x-api-key') || '')
-    if (chave && chave === apiKeyAtual) { next(); return }
-    registrarLog('WARNING', `Requisição sem chave válida bloqueada: ${req.method} ${req.path} de ${req.socket.remoteAddress}`)
-    res.status(401).json({ erro: 'Chave de API inválida ou ausente. Configure a chave deste terminal na tela do servidor.' })
+    if (ROTAS_PUBLICAS.has(req.path)) { next(); return }
+    limparSessoesExpiradas()
+    const token = String(req.get('x-sessao-token') || '')
+    const sessao = token ? sessoes.get(token) : undefined
+    if (sessao) { next(); return }
+    registrarLog('WARNING', `Requisição sem sessão válida bloqueada: ${req.method} ${req.path} de ${req.socket.remoteAddress}`)
+    res.status(401).json({ erro: 'Sessão inválida ou ausente. Faça login no terminal.' })
   })
 
   // Rotas administrativas/destrutivas: SOMENTE execução local (no servidor).
@@ -434,7 +465,18 @@ export function iniciarServidor(porta = 3210): void {
         database.prepare(`UPDATE usuarios SET senha_hash = ? WHERE id = ?`).run(ver.upgraded, user.id)
       } catch { /* ignore — migração é best-effort */ }
     }
-    res.json({ ok: true, usuario: user })
+    // Cria a sessão de login (token aleatório) para o terminal usar nas rotas.
+    limparSessoesExpiradas()
+    const token = gerarTokenSessao()
+    sessoes.set(token, { usuario_id: user.id, login: user.login, perfil: user.perfil, criado_em: Date.now() })
+    registrarLog('INFO', `Login: ${user.login} (${user.perfil})`)
+    res.json({ ok: true, usuario: user, token })
+  })
+
+  app.post('/api/auth/logout', (req, res) => {
+    const token = String(req.get('x-sessao-token') || '')
+    if (token) sessoes.delete(token)
+    res.json({ ok: true })
   })
 
   app.post('/api/auth/criarUsuario', somenteLocal, (req, res) => {
@@ -527,7 +569,11 @@ export function iniciarServidor(porta = 3210): void {
   app.get('/api/config', (_req, res) => {
     const rows = database.prepare(`SELECT chave, valor FROM config`).all() as { chave: string; valor: string }[]
     const config: Record<string, string> = {}
-    for (const r of rows) config[r.chave] = r.valor
+    for (const r of rows) {
+      // NUNCA expõe segredos (api_key) em respostas públicas da LAN.
+      if (r.chave === 'api_key') continue
+      config[r.chave] = r.valor
+    }
     res.json(config)
   })
 
@@ -1338,6 +1384,9 @@ export function iniciarServidor(porta = 3210): void {
     res.json(r)
   })
 
+  // ---------- WhatsApp Bot ----------
+  registerWhatsAppRoutes(app, database)
+
   // Registra erros de todas as rotas da API no log
   registrarErrosApi(app)
 
@@ -1445,6 +1494,7 @@ function agendarSyncPeriodica(): void {
 }
 
 export function pararServidor(): void {
+  try { stopWhatsApp() } catch {}
   if (server) {
     server.close()
     server = null
@@ -1480,4 +1530,17 @@ if (require.main === module) {
   initDb()
   seed(getDb())
   iniciarServidor(Number(process.env.TABACARIA_PORTA) || 3210)
+
+  // Graceful shutdown
+  const shutdown = () => {
+    try { registrarLog('INFO', 'Servidor encerrando (shutdown)...') } catch {}
+    try { pararServidor() } catch {}
+    try {
+      const d = getDb()
+      if (d) { d.close(); db = null }
+    } catch {}
+    process.exit(0)
+  }
+  process.on('SIGTERM', shutdown)
+  process.on('SIGINT', shutdown)
 }

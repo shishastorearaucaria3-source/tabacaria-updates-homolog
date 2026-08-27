@@ -414,8 +414,9 @@ export async function carregarRetencao(p: Periodo): Promise<{ periodo: string; c
   return rows.map((r) => ({ periodo: r.periodo, clientes_novos: r.total_clientes, clientes_recorrentes: 0, recorrencia_pct: 0 }))
 }
 
-export async function carregarMovimentacaoEstoque(): Promise<{ produto: string; entradas: number; saidas: number; saldo: number }[]> {
+export async function carregarMovimentacaoEstoque(p: Periodo): Promise<{ produto: string; entradas: number; saidas: number; saldo: number }[]> {
   const db = getDbApi()
+  const m = clausulaSql('m.criado_em', p)
   const rows = (await db.all(
     `SELECT p.nome AS produto,
             COALESCE(SUM(CASE WHEN m.tipo='entrada' THEN m.quantidade ELSE 0 END),0) AS entradas,
@@ -423,9 +424,11 @@ export async function carregarMovimentacaoEstoque(): Promise<{ produto: string; 
             COALESCE(p.estoque,0) AS saldo
      FROM movimentacoes m
      JOIN produtos p ON p.id = m.produto_id
+     WHERE 1=1${m.sql}
      GROUP BY p.id, p.nome, p.estoque
      ORDER BY saidas DESC
-     LIMIT 200`
+     LIMIT 200`,
+    m.params
   )) as unknown as { produto: string; entradas: number; saidas: number; saldo: number }[]
   return rows
 }

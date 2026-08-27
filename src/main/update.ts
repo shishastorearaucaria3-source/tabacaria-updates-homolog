@@ -6,16 +6,17 @@ import { createHash } from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
 import { validarManifesto, deveAtualizar, urlCanalValida, ManifestoAtualizacao } from '../shared/update'
 import { servidorClient } from './servidor'
+import { getDataDir, getUpdateUrlPath, getUpdateMarkerPath } from '../shared/data-dir'
 import { gravarLogServidor } from './log'
 
 export const APLICATIVO_NOME = 'NossoSistema'
 
 function pastaDados(): string {
-  return join(app.getPath('userData'))
+  return getDataDir()
 }
 
 function caminhoUrlConfig(): string {
-  return join(pastaDados(), 'update.url')
+  return getUpdateUrlPath()
 }
 
 export function getUpdateBaseUrl(): string {
@@ -220,7 +221,7 @@ function rodarComCaptura(arquivo: string, args: string[], timeoutMs: number, env
 }
 
 function caminhoMarcador(): string {
-  return join(app.getPath('userData'), 'atualizacao-pendente.json')
+  return getUpdateMarkerPath()
 }
 
 function gravarMarcador(dados: Record<string, unknown>): void {

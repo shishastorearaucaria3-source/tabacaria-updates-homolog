@@ -151,11 +151,11 @@ export default function Relatorios({
         return
       }
       if (relatorio === 'estoque-movimentacao') {
-        setMovimentacao(await carregarMovimentacaoEstoque())
+        setMovimentacao(await carregarMovimentacaoEstoque(p))
         return
       }
       if (relatorio === 'estoque-consumo') {
-        setMovimentacao(await carregarMovimentacaoEstoque())
+        setMovimentacao(await carregarMovimentacaoEstoque(p))
         return
       }
       const [m, h, mp, cv, pv, pp] = await Promise.all([
@@ -515,6 +515,7 @@ export default function Relatorios({
 
   const renderMovimentacao = () => (
     <>
+      <ReportFilters filtros={filtros} onMudar={setFiltros} />
       {renderBarChart(movimentacao.slice(0, 10).map((m) => ({ label: m.produto, valor: m.saidas })))}
       {renderTabelaGenerica(
         [{ titulo: 'Produto', chave: 'produto' }, { titulo: 'Entradas', chave: 'entradas' }, { titulo: 'Saídas', chave: 'saidas' }, { titulo: 'Saldo', chave: 'saldo' }],

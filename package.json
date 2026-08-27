@@ -1,6 +1,6 @@
 {
   "name": "sistema-loja-tabacaria",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Sistema de gestão para loja de tabacaria: PVD balcão, estoque, financeiro, CRM, comissão e delivery online",
   "main": "out/main/index.js",
   "author": "Loja Tabacaria",
@@ -24,7 +24,6 @@
     "publicar": "node scripts/publicar-versao.js"
   },
   "dependencies": {
-    "@types/leaflet": "^1.9.22",
     "adm-zip": "^0.6.0",
     "bcryptjs": "^2.4.3",
     "express": "^4.21.2",
@@ -36,6 +35,7 @@
     "@types/adm-zip": "^0.5.8",
     "@types/bcryptjs": "^2.4.6",
     "@types/express": "^4.17.21",
+    "@types/leaflet": "^1.9.22",
     "@types/node": "^22.13.10",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",

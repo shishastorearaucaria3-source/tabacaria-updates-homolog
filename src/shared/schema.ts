@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 38
+export const SCHEMA_VERSION = 40
 
 export const migrations: Record<number, string> = {
   1: `
@@ -651,5 +651,159 @@ export const migrations: Record<number, string> = {
 
     CREATE INDEX idx_mov_documento ON movimentacoes(documento);
     CREATE INDEX idx_mov_categoria ON movimentacoes(categoria);
+  `,
+  39: `
+    -- ============================================================
+    -- MIGRATION 39: WhatsApp Attendance Module
+    -- Tabelas novas (prefixo whatsapp_) + coluna origem em pedidos
+    -- ============================================================
+
+    -- Coluna para rastrear origem do pedido (sistema, whatsapp, catalogo)
+    ALTER TABLE pedidos ADD COLUMN origem TEXT NOT NULL DEFAULT 'sistema';
+
+    -- Estado da conversa WhatsApp (por telefone)
+    CREATE TABLE IF NOT EXISTS whatsapp_conversation_state (
+      phone TEXT PRIMARY KEY,
+      state TEXT NOT NULL DEFAULT 'MENU_PRINCIPAL',
+      last_product_id INTEGER REFERENCES produtos(id),
+      last_products_json TEXT,
+      last_intent TEXT,
+      pending_question TEXT,
+      checkout_data TEXT,
+      attendance_status TEXT NOT NULL DEFAULT 'BOT',
+      updated_at TEXT NOT NULL
+    );
+
+    -- Mensagens da conversa (histórico)
+    CREATE TABLE IF NOT EXISTS whatsapp_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      phone TEXT NOT NULL,
+      direction TEXT NOT NULL,
+      text TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_wa_msg_phone ON whatsapp_messages(phone, id);
+
+    -- Eventos do webhook (dedup)
+    CREATE TABLE IF NOT EXISTS whatsapp_webhook_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      message_id TEXT UNIQUE,
+      phone TEXT NOT NULL,
+      event_type TEXT,
+      payload_json TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'RECEIVED',
+      received_at TEXT NOT NULL
+    );
+
+    -- Carrinho do WhatsApp
+    CREATE TABLE IF NOT EXISTS whatsapp_carts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      customer_phone TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'OPEN',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_wa_carts_phone ON whatsapp_carts(customer_phone, status);
+
+    -- Itens do carrinho
+    CREATE TABLE IF NOT EXISTS whatsapp_cart_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      cart_id INTEGER NOT NULL REFERENCES whatsapp_carts(id),
+      produto_id INTEGER NOT NULL REFERENCES produtos(id),
+      quantity REAL NOT NULL CHECK (quantity > 0),
+      unit_price REAL NOT NULL CHECK (unit_price >= 0),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_wa_cart_items_cart ON whatsapp_cart_items(cart_id);
+
+    -- Configurações do WhatsApp (chave/valor)
+    CREATE TABLE IF NOT EXISTS whatsapp_config (
+      chave TEXT PRIMARY KEY,
+      valor TEXT
+    );
+
+    -- Intents configuráveis
+    CREATE TABLE IF NOT EXISTS whatsapp_intents (
+      name TEXT PRIMARY KEY,
+      description TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      priority INTEGER NOT NULL DEFAULT 100
+    );
+
+    CREATE TABLE IF NOT EXISTS whatsapp_intent_phrases (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      intent_name TEXT NOT NULL REFERENCES whatsapp_intents(name) ON DELETE CASCADE,
+      phrase TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_wa_intent_phrases ON whatsapp_intent_phrases(intent_name);
+
+    -- Mensagens configuráveis
+    CREATE TABLE IF NOT EXISTS whatsapp_responses (
+      key TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      text TEXT NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1
+    );
+
+    -- Menu dinâmico
+    CREATE TABLE IF NOT EXISTS whatsapp_menu_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      position INTEGER NOT NULL,
+      label TEXT NOT NULL,
+      action TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1
+    );
+
+    -- Configurações de entrega WhatsApp
+    CREATE TABLE IF NOT EXISTS whatsapp_delivery_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+
+    -- Seed de configurações padrão WhatsApp
+    INSERT OR IGNORE INTO whatsapp_config (chave, valor) VALUES
+      ('wa_api_url', 'http://localhost:8080'),
+      ('wa_api_key', ''),
+      ('wa_webhook_token', ''),
+      ('wa_mock', 'false'),
+      ('conversation_timeout', '30'),
+      ('admin_user', 'admin'),
+      ('admin_password', 'admin123'),
+      ('store_name', 'Loja Tabacaria'),
+      ('attendance_status', 'BOT');
+
+    -- Seed de intents padrão
+    INSERT OR IGNORE INTO whatsapp_intents (name, description, enabled, priority) VALUES
+      ('HUMAN_HANDOFF', 'Solicitar atendente humano', 1, 200),
+      ('CANCEL', 'Cancelar operação atual', 1, 150),
+      ('BACK', 'Voltar ao passo anterior', 1, 150),
+      ('MENU', 'Ver menu principal', 1, 120),
+      ('ORDER', 'Fazer pedido', 1, 110),
+      ('ADD_TO_CART', 'Adicionar item ao carrinho', 1, 110),
+      ('VIEW_CART', 'Ver carrinho', 1, 110),
+      ('LIST', 'Listar produtos', 1, 100),
+      ('PRODUCT_SEARCH', 'Buscar produto', 1, 100),
+      ('SMALLTALK', 'Conversa casual', 1, 50),
+      ('NUMERIC', 'Resposta numérica contextual', 1, 80),
+      ('NONE', 'Sem intenção detectada', 1, 0);
+  `,
+  40: `
+    -- ============================================================
+    -- MIGRATION 40: WhatsApp Integration Fixes
+    -- Coluna atualizado_em em clientes, índices, sequência pedido
+    -- ============================================================
+
+    -- Coluna para rastreamento de atualização de clientes (usada pelo WhatsApp)
+    ALTER TABLE clientes ADD COLUMN atualizado_em TEXT;
+
+    -- Índices para performance do WhatsApp (busca por telefone)
+    CREATE INDEX IF NOT EXISTS idx_clientes_telefone ON clientes(telefone);
+    CREATE INDEX IF NOT EXISTS idx_pedidos_telefone ON pedidos(cliente_telefone);
+    CREATE INDEX IF NOT EXISTS idx_pedidos_origem ON pedidos(origem);
+
+    -- Sequência para números de pedido WhatsApp
+    INSERT OR IGNORE INTO sequencias (chave, valor) VALUES ('pedido', 0);
   `
 }

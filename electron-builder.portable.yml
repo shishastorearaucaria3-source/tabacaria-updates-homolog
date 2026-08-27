@@ -57,8 +57,14 @@ asarUnpack:
   - node_modules/side-channel-list/**/*
   - node_modules/side-channel-map/**/*
   - node_modules/side-channel-weakmap/**/*
+extraResources:
+  - from: build/icones/servidor.ico
+    to: servidor.ico
+  - from: src/panel-servidor
+    to: servidor-panel
 win:
   icon: build/icones/sistema.png
+  signExecutable: false
   target:
     - portable
 artifactName: NossoSistema.exe

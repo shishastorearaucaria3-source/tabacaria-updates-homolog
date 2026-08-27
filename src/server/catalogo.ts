@@ -1,9 +1,10 @@
-import { DatabaseSync } from 'node:sqlite'
+﻿import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import sharp from 'sharp'
 import { join } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { getDb } from './index'
+import { getDataDir, getImageCacheDir } from '../shared/data-dir'
 
 export interface CatalogoConfig {
   github_token: string
@@ -1112,9 +1113,7 @@ const IMAGEM_LADO_MAX = 800
 const IMAGEM_QUALIDADE = 80
 
 function cacheImagensDir(): string {
-  const base = process.env.TABACARIA_DB
-    ? join(process.env.TABACARIA_DB, '..', 'imagens_cache')
-    : join(process.env.APPDATA || process.env.USERPROFILE || '.', 'sistema-loja-tabacaria', 'imagens_cache')
+  const base = getImageCacheDir()
   if (!existsSync(base)) mkdirSync(base, { recursive: true })
   return base
 }
@@ -1533,9 +1532,7 @@ export async function testarConexao(): Promise<{ ok: boolean; mensagem: string }
 // Permite restaurar os dados salvos sem depender do banco principal.
 
 function dirBackupConfig(): string {
-  const base = process.env.TABACARIA_DB
-    ? join(process.env.TABACARIA_DB, '..')
-    : join(process.env.APPDATA || process.env.USERPROFILE || '.', 'sistema-loja-tabacaria')
+  const base = getDataDir()
   if (!existsSync(base)) mkdirSync(base, { recursive: true })
   return base
 }

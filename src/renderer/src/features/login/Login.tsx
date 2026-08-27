@@ -21,9 +21,9 @@ export default function Login({ onLogin }: { onLogin: (u: Usuario) => void }) {
   const [urlAtual, setUrlAtual] = useState('')
   const [modoLocal, setModoLocal] = useState(true)
   const [ipManual, setIpManual] = useState('')
-  const [chaveApi, setChaveApi] = useState('')
   const [conexaoMsg, setConexaoMsg] = useState<{ ok: boolean; texto: string } | null>(null)
   const [testando, setTestando] = useState(false)
+  const [descobrindo, setDescobrindo] = useState(false)
 
   const carregarConexao = async () => {
     try {
@@ -32,15 +32,38 @@ export default function Login({ onLogin }: { onLogin: (u: Usuario) => void }) {
       setUrlAtual(c.url)
       setModoLocal(c.local)
       if (!c.local && c.ips.length > 0) setIpManual(c.ips[0])
-      // Só busca usuários no mount quando já existe conexão de rede configurada
-      // (chave de API gravada) ou servidor local. Sem chave, NADA é requisitado
-      // antes do usuário informar a chave — evita o 401 "sem chave válida".
-      if (c.local || c.temChave) carregarUsuarios()
     } catch { /* servidor indisponível */ }
   }
 
   useEffect(() => {
     carregarConexao()
+    // Descoberta automática: o terminal localiza o servidor na LAN sozinho,
+    // sem digitar IP nem chave. Se encontrar, configura e carrega os usuários.
+    const descobrirEConectar = async () => {
+      if (!hasDbApi()) return
+      setDescobrindo(true)
+      try {
+        const d = await getServidorApi().descobrir()
+        if (d.servidores.length > 0) {
+          // Usa o primeiro servidor encontrado (ou o que já estava configurado).
+          const url = d.servidores[0]
+          const c = await getServidorApi().configurarConexao({ url })
+          setUrlAtual(c.url)
+          setModoLocal(c.url.startsWith('http://localhost'))
+          carregarUsuarios()
+          setConexaoMsg({ ok: true, texto: `Servidor encontrado: ${url}` })
+        } else {
+          // Nenhum servidor na LAN; se já havia URL configurada, tenta ela.
+          const c = await getServidorApi().conexao()
+          if (c.url && !c.url.startsWith('http://localhost')) {
+            const t = await getServidorApi().testar()
+            if (t.ok) carregarUsuarios()
+          }
+        }
+      } catch { /* servidor indisponível */ }
+      setDescobrindo(false)
+    }
+    descobrirEConectar()
   }, [])
 
   useEffect(() => {
@@ -57,16 +80,14 @@ export default function Login({ onLogin }: { onLogin: (u: Usuario) => void }) {
       .catch(() => setCarregando(false))
   }, [onLogin])
 
-  // Carrega a lista de usuários SOMENTE quando a conexão já está estabelecida
-  // (servidor local respondendo OU URL remota configurada com chave). NUNCA
-  // dispara /api/db/all antes de configurarConexao — senão o servidor bloqueia
-  // a requisição sem chave (401) e o log fica poluído com falsos alertas.
+  // Carrega a lista de usuários via a rota pública de usuários (sem precisar de
+// sessão). O terminal NUNCA digita nem armazena API Key — o servidor autoriza
+// pela LAN e a autenticação real é o login de usuário/senha.
   const carregarUsuarios = () => {
     if (!hasDbApi()) return
-    getDbApi()
-      .all(`SELECT id, nome, login, perfil FROM usuarios WHERE ativo = 1 ORDER BY nome`)
-      .then((rows) => {
-        const lista = rows as unknown as UsuarioLogin[]
+    getAuthApi()
+      .usuarios()
+      .then((lista) => {
         setUsuarios(lista)
         const salvo = localStorage.getItem('nex_ultimo_login')
         if (salvo) {
@@ -93,9 +114,8 @@ export default function Login({ onLogin }: { onLogin: (u: Usuario) => void }) {
     setConexaoMsg(null)
     setTestando(true)
     try {
-      // Em modo rede, envia a chave de API informada (segredo de conexão).
-      // Em modo local a chave não é necessária (loopback tem acesso integral).
-      const r = await getServidorApi().configurarConexao(opcoes.local ? { local: true } : { local: false, ip: opcoes.ip, apiKey: chaveApi.trim() })
+      // Sem API Key: o servidor autoriza pela LAN; a autenticação real é o login.
+      const r = await getServidorApi().configurarConexao(opcoes.local ? { local: true } : { local: false, ip: opcoes.ip })
       setUrlAtual(r.url)
       setIps(r.ips)
       setModoLocal(!!opcoes.local)
@@ -198,17 +218,8 @@ export default function Login({ onLogin }: { onLogin: (u: Usuario) => void }) {
                   {testando ? 'Conectando...' : 'Conectar'}
                 </button>
               </div>
-              <div className="login-ip-manual">
-                <input
-                  type="password"
-                  value={chaveApi}
-                  onChange={(e) => setChaveApi(e.target.value)}
-                  placeholder="Chave de API (copie da tela do servidor)"
-                  autoComplete="off"
-                />
-              </div>
               <p className="nota-config" style={{ fontSize: 12, color: '#6b7280', margin: '4px 0 0' }}>
-                A chave de acesso é exibida no computador do servidor, na tela Servidor → "Chave de acesso da rede". Terminais em rede precisam dela.
+                {descobrindo ? 'Procurando servidor na rede...' : 'O sistema procura o servidor automaticamente. Nenhuma chave é necessária.'}
               </p>
             </div>
           )}

@@ -15,12 +15,12 @@ import Caixa from './features/caixa/Caixa'
 import CaixaTransacoes from './features/caixa/CaixaTransacoes'
 import FormasPagamento from './features/formaspagamento/FormasPagamento'
 import AlterarPrecos from './features/precos/AlterarPrecos'
-import Servidor from './features/servidor/Servidor'
+import AtendimentoWhatsApp from './features/whatsapp/AtendimentoWhatsApp'
 import Home from './features/inicio/Home'
 import Login from './features/login/Login'
 import { getDbApi, hasDbApi, getAuthApi, Usuario, fazerBackupManual, setFullscreen, getCatalogoApi, getServidorApi } from './shared/db'
 
-type Tela = 'inicio' | 'pdv' | 'produtos' | 'clientes' | 'vendas' | 'estoque' | 'financeiro' | 'comissoes' | 'relatorios' | 'usuarios' | 'delivery' | 'zonas' | 'catalogo' | 'caixa' | 'formaspagamento' | 'precos' | 'nfe' | 'sobre' | 'servidor'
+type Tela = 'inicio' | 'pdv' | 'produtos' | 'clientes' | 'vendas' | 'estoque' | 'financeiro' | 'comissoes' | 'relatorios' | 'usuarios' | 'delivery' | 'zonas' | 'catalogo' | 'caixa' | 'formaspagamento' | 'precos' | 'nfe' | 'sobre' | 'whatsapp'
 
 const ICONES: Record<string, string> = {
   inicio: 'M3 10.5 12 3l9 7.5V21h-6v-6h-6v6H3z',
@@ -42,7 +42,7 @@ const ICONES: Record<string, string> = {
   formas: 'M2 7a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z M2 10h20',
   precos: 'M3 6h18v13H3z M12 12a2 2 0 1 0 0-4 2 2 0 0 0 0 4z M5 9h3 M5 13h3',
   usuarios: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M4 21v-2a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v2',
-  servidor: 'M2 12a10 10 0 1 1 20 0 10 10 0 0 1-20 0z M12 7v5l3 2 M12 2v2 M12 20v2 M2 12h2 M20 12h2'
+  whatsapp: 'M12 2C6.48 2 2 6.48 2 12c0 1.82.5 3.53 1.35 5L2 22l5.14-1.34A9.94 9.94 0 0 0 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2z M16.5 14.5c-.25-.13-1.5-.74-1.73-.82-.23-.09-.4-.13-.56.13-.17.27-.64.82-.79.98-.14.17-.29.19-.54.06-.25-.13-1.04-.38-1.98-1.22-.74-.65-1.23-1.46-1.38-1.71-.14-.25-.02-.38.1-.51.1-.11.25-.29.37-.43.13-.15.17-.25.25-.42.08-.17.04-.31-.02-.44-.06-.13-.56-1.35-.76-1.85-.2-.48-.4-.42-.56-.42h-.48c-.17 0-.43.06-.66.31-.23.25-.87.85-.87 2.07 0 1.22.89 2.4 1.01 2.56.13.17 1.75 2.67 4.24 3.74.59.26 1.05.41 1.41.52.59.19 1.13.16 1.56.1.47-.07 1.5-.61 1.71-1.2.22-.59.22-1.1.15-1.2-.06-.11-.23-.17-.48-.3z'
 }
 
 interface MenuItem {
@@ -70,7 +70,7 @@ const MENU_PRINCIPAL: MenuItem[] = [
 const MENU_GESTAO: MenuItem[] = [
   { id: 'comissoes', label: 'Comissões', icon: 'comissoes' },
   { id: 'precos', label: 'Alterar preços', icon: 'precos' },
-  { id: 'servidor', label: 'Servidor', icon: 'servidor', admin: true },
+  { id: 'whatsapp', label: 'Atendimento WhatsApp', icon: 'whatsapp', admin: true },
   { id: 'usuarios', label: 'Gerenciar usuários', icon: 'usuarios', admin: true }
 ]
 
@@ -388,8 +388,8 @@ export default function App() {
         return <FormasPagamento />
       case 'precos':
         return <AlterarPrecos usuarioId={usuario.id} />
-      case 'servidor':
-        return <Servidor />
+      case 'whatsapp':
+        return <AtendimentoWhatsApp />
       case 'nfe':
       case 'sobre':
         return <EmBreve titulo={MENU_PRINCIPAL.find((m) => m.id === tela)?.label ?? ''} />

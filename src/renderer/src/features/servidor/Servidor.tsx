@@ -85,7 +85,6 @@ export default function Servidor() {
   const [updateDisponivel, setUpdateDisponivel] = useState<{ atual: string; nova: string; notas: string[] } | null>(null)
   const [chave, setChave] = useState<ChaveApi | null>(null)
   const [conexaoUrl, setConexaoUrl] = useState('')
-  const [conexaoKey, setConexaoKey] = useState('')
   const [msgConexao, setMsgConexao] = useState('')
   const logsRef = useRef<HTMLDivElement>(null)
 
@@ -110,12 +109,12 @@ export default function Servidor() {
       if (!/^https?:\/\//i.test(url)) url = `http://${url}`
       const hostParte = url.replace(/^https?:\/\//i, '')
       const local = /^localhost/i.test(hostParte) || /^127\.0\.0\.1/.test(hostParte)
-      getServidorApi().configurarConexao({ local, url, apiKey: conexaoKey.trim() })
+      getServidorApi().configurarConexao({ local, url })
       const t = await getServidorApi().testar()
       if (t.ok) {
         setMsgConexao(`Conectado em ${t.url}. Reinicie o aplicativo para aplicar em todas as telas.`)
       } else {
-        setMsgConexao(`Configuração salva, mas sem resposta do servidor: ${t.erro ?? 'erro'}. Confira IP/porta/chave.`)
+        setMsgConexao(`Configuração salva, mas sem resposta do servidor: ${t.erro ?? 'erro'}. Confira IP/porta.`)
       }
     } catch (e) {
       setMsgConexao(`Erro ao salvar conexão: ${(e as Error).message}`)
@@ -486,8 +485,8 @@ export default function Servidor() {
         <section className="rp-tabela-card">
           <h4>Conexão deste terminal</h4>
           <p className="nota-config">
-            No computador do servidor use http://localhost:PORTA. Em terminais de rede, informe o IP do servidor e a
-            chave de acesso exibida na tela do servidor.
+            No computador do servidor use http://localhost:PORTA. Em terminais de rede, o sistema descobre o servidor
+            automaticamente — nenhuma chave manual é necessária.
           </p>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             <input
@@ -497,13 +496,6 @@ export default function Servidor() {
               onChange={(e) => setConexaoUrl(e.target.value)}
               style={{ minWidth: 240 }}
             />
-            <input
-              className="input"
-              placeholder="Chave de API (terminais remotos)"
-              value={conexaoKey}
-              onChange={(e) => setConexaoKey(e.target.value)}
-              style={{ minWidth: 260, fontFamily: 'monospace' }}
-            />
             <button className="btn-mini" onClick={salvarConexao}>Salvar e usar</button>
           </div>
           {msgConexao && <p className="nota-config">{msgConexao}</p>}
@@ -511,9 +503,10 @@ export default function Servidor() {
 
         {/* Chave de acesso da rede (terminais remotos) */}
         <section className="rp-tabela-card">
-          <h4>Chave de acesso da rede (terminais remotos)</h4>
+          <h4>Chave de acesso da rede (somente servidor)</h4>
           <p className="nota-config">
-            Terminais conectados pela rede precisam desta chave para acessar o servidor. O computador local não precisa dela.
+            Chave de API exclusiva do computador servidor. Terminais de rede NÃO precisam dela — a conexão é automática
+            pela LAN com login de usuário. Mantida aqui para compatibilidade e acesso administrativo externo.
           </p>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <code style={{ background: '#f3f4f6', padding: '6px 10px', borderRadius: 6, wordBreak: 'break-all', fontFamily: 'monospace' }}>

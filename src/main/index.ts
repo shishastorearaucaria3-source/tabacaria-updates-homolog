@@ -1,12 +1,13 @@
-import { app, shell, BrowserWindow, ipcMain, dialog, Tray, Menu, nativeImage } from 'electron'
+﻿import { app, shell, BrowserWindow, ipcMain, dialog, Tray, Menu, nativeImage } from 'electron'
 import { join, dirname, basename, resolve } from 'node:path'
 import { existsSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { execSync, spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { registerDbHandlers } from './ipc'
-import { servidorClient, getServidorUrl, configurarServidor, lerPortaGravada } from './servidor'
+import { servidorClient, getServidorUrl, configurarServidor, lerPortaGravada, descobrirServidor } from './servidor'
 import { gravarLogServidor } from './log'
 import { versaoAtual, verificarAtualizacao, instalarAtualizacao, getUpdateBaseUrl, setUpdateBaseUrl, tipoInstalacaoAtual } from './update'
+import { getUpdateMarkerPath, getLogFilePath } from '../shared/data-dir'
 
 const PRODUTO = 'NossoSistema'
 const APP_ID = 'br.com.lojatabacaria.sistema'
@@ -26,7 +27,7 @@ function registrarErroGlobal(): void {
       dialog.showMessageBoxSync(mainWindow ?? undefined!, {
         type: 'error',
         title: `${PRODUTO} — erro ao iniciar`,
-        message: `${titulo}:\n\n${msg}\n\nRegistro: %APPDATA%\\sistema-loja-tabacaria\\servidor-inicio.log`
+        message: `${titulo}:\n\n${msg}\n\nRegistro: ${getLogFilePath()}`
       })
     } catch { /* ignore */ }
   }
@@ -39,7 +40,7 @@ function registrarErroGlobal(): void {
 // versões envolvidas. Roda antes de qualquer outra inicialização.
 function validarAtualizacaoPendente(): void {
   try {
-    const f = join(app.getPath('userData'), 'atualizacao-pendente.json')
+    const f = getUpdateMarkerPath()
     if (!existsSync(f)) return
     const m = JSON.parse(readFileSync(f, 'utf8')) as { versaoEsperada?: string; etapas?: string[]; iniciadoEm?: string }
     const atual = app.getVersion()
@@ -108,6 +109,7 @@ function createWindow(): void {
       sandbox: false
     }
   })
+  app.setAppUserModelId(APP_ID)
 
   let timerMostrar: NodeJS.Timeout | null = null
   const mostrar = (): void => {
@@ -275,24 +277,41 @@ async function verificarServidor(): Promise<void> {
   }
   if (urlRemota(url) || tipoInstalacaoAtual() === 'cliente') {
     // Instalação cliente: NUNCA sobe servidor local (senão abre um banco
-    // vazio deste PC e confunde). O login oferece a conexão ("Outro (rede)").
-    if (urlRemota(url)) {
-      console.error(`[sistema] Servidor remoto indisponível em ${url}`)
-      gravarLogServidor(`servidor remoto indisponível: ${url}`)
-      dialog.showMessageBoxSync(mainWindow ?? undefined!, {
-        type: 'error',
-        title: 'Servidor não encontrado',
-        message: `Não foi possível conectar ao servidor em:\n\n${url}\n\nVerifique se:\n• o computador servidor está ligado e com o "Servidor" aberto (ícone na bandeja);\n• o endereço está correto.\n\nVocê pode ajustar a conexão na tela de login, opção "Outro (rede)".`
-      })
-    } else {
+    // vazio deste PC e confunde). O sistema descobre o servidor na LAN
+    // automaticamente; se nenhum responde, a tela de login oferece a conexão.
+    if (!urlRemota(url)) {
+      // Sem URL configurada: tenta descobrir o servidor na LAN.
+      const d = await descobrirServidor()
+      if (d.servidores.length > 0) {
+        configurarServidor(d.servidores[0])
+        console.log(`[sistema] Servidor descoberto automaticamente: ${d.servidores[0]}`)
+        gravarLogServidor(`servidor descoberto: ${d.servidores[0]}`)
+        return
+      }
       console.error('[sistema] Instalação cliente sem endereço de servidor configurado')
       gravarLogServidor('cliente sem endereço de servidor configurado')
       dialog.showMessageBoxSync(mainWindow ?? undefined!, {
         type: 'info',
         title: 'Conectar ao servidor',
-        message: `Este computador foi instalado como CLIENTE (balcão).\n\nPara usar o sistema, conecte ao servidor da loja na tela de login:\n• escolha "Outro (rede)";\n• digite o IP do servidor (ex.: 192.168.0.117) e clique em "Conectar".\n\nO endereço fica salvo — na próxima vez abre direto.`
+        message: `Este computador foi instalado como CLIENTE (balcão).\n\nO sistema procurou o servidor na rede e não o encontrou.\nNa tela de login, escolha "Outro (rede)" e digite o IP do servidor (ex.: 192.168.0.117).`
       })
+      return
     }
+    // URL remota configurada mas sem resposta: tenta descobrir na LAN antes de falhar.
+    const d = await descobrirServidor()
+    if (d.servidores.length > 0) {
+      configurarServidor(d.servidores[0])
+      console.log(`[sistema] Servidor descoberto automaticamente: ${d.servidores[0]} (anterior: ${url})`)
+      gravarLogServidor(`servidor descoberto: ${d.servidores[0]} (anterior: ${url})`)
+      return
+    }
+    console.error(`[sistema] Servidor remoto indisponível em ${url}`)
+    gravarLogServidor(`servidor remoto indisponível: ${url}`)
+    dialog.showMessageBoxSync(mainWindow ?? undefined!, {
+      type: 'error',
+      title: 'Servidor não encontrado',
+      message: `Não foi possível conectar ao servidor em:\n\n${url}\n\nVerifique se:\n• o computador servidor está ligado e com o "Servidor" aberto (ícone na bandeja);\n• o endereço está correto.\n\nNa tela de login, escolha "Outro (rede)" para ajustar a conexão.`
+    })
     return
   }
   const ok = await iniciarServidorExterno()
@@ -334,7 +353,7 @@ function caminhoPainelServidor(): { html: string; preload: string } {
 }
 
 function criarJanelaServidor(): void {
-  if (janelaServidor) {
+  if (janelaServidor && !janelaServidor.isDestroyed()) {
     janelaServidor.show()
     janelaServidor.focus()
     return
@@ -347,7 +366,7 @@ function criarJanelaServidor(): void {
     minHeight: 560,
     title: 'Servidor do Sistema',
     autoHideMenuBar: true,
-    show: true,
+    show: false,
     icon: criarIconeServidor(),
     webPreferences: {
       contextIsolation: true,
@@ -356,7 +375,17 @@ function criarJanelaServidor(): void {
       preload: painel.preload
     }
   })
-  janelaServidor.on('ready-to-show', () => janelaServidor?.show())
+  app.setAppUserModelId(`${APP_ID}.servidor`)
+  janelaServidor.on('ready-to-show', () => {
+    janelaServidor?.show()
+    janelaServidor?.focus()
+  })
+  janelaServidor.on('close', (e) => {
+    if (modoServidor) {
+      e.preventDefault()
+      janelaServidor?.hide()
+    }
+  })
   janelaServidor.on('closed', () => {
     janelaServidor = null
   })
@@ -391,23 +420,80 @@ function registrarIpc(): void {
     if (mainWindow) mainWindow.setFullScreen(!!ativo)
   })
   ipcMain.on('janela:minimizar', () => {
-    janelaServidor?.minimize()
+    if (modoServidor) {
+      janelaServidor?.hide()
+    } else {
+      janelaServidor?.minimize()
+    }
   })
   ipcMain.on('janela:fechar', () => {
-    janelaServidor?.close()
+    if (modoServidor) {
+      janelaServidor?.hide()
+    } else {
+      janelaServidor?.close()
+    }
+  })
+  ipcMain.on('janela:encerrar', () => {
+    app.quit()
   })
 }
 
 function criarBandejaServidor(): void {
   bandeja = new Tray(criarIconeServidor())
   bandeja.setToolTip('Servidor NossoSistema — Online')
+  bandeja.on('double-click', () => {
+    if (janelaServidor && !janelaServidor.isDestroyed()) {
+      if (janelaServidor.isVisible()) {
+        janelaServidor.hide()
+      } else {
+        janelaServidor.show()
+        janelaServidor.focus()
+      }
+    } else {
+      criarJanelaServidor()
+    }
+  })
+  bandeja.on('click', () => {
+    if (janelaServidor && !janelaServidor.isDestroyed()) {
+      if (janelaServidor.isVisible()) {
+        janelaServidor.hide()
+      } else {
+        janelaServidor.show()
+        janelaServidor.focus()
+      }
+    } else {
+      criarJanelaServidor()
+    }
+  })
   const menu = Menu.buildFromTemplate([
     { label: 'Servidor online', enabled: false },
     { type: 'separator' },
-    { label: 'Abrir servidor', click: criarJanelaServidor },
+    { label: 'Abrir servidor', click: () => { criarJanelaServidor() } },
     { label: 'Encerrar servidor', click: () => app.quit() }
   ])
   bandeja.setContextMenu(menu)
+}
+
+// Single-instance lock: only for the GUI (non-servidor) mode.
+// The --servidor child is a separate Electron instance and must NOT
+// compete for the same lock — otherwise the parent holds it and the
+// child quits immediately.
+if (!process.argv.includes('--servidor')) {
+  const singleLock = app.requestSingleInstanceLock()
+  if (!singleLock) {
+    app.quit()
+  } else {
+    app.on('second-instance', () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        if (mainWindow.isVisible()) {
+          mainWindow.focus()
+        } else {
+          mainWindow.show()
+          mainWindow.focus()
+        }
+      }
+    })
+  }
 }
 
 app.whenReady().then(async () => {
@@ -432,10 +518,8 @@ app.whenReady().then(async () => {
       }
       criarBandejaServidor()
       gravarLogServidor('bandeja criada')
-      if (process.argv.includes('--abrir-painel')) {
-        criarJanelaServidor()
-        gravarLogServidor('painel aberto')
-      }
+      criarJanelaServidor()
+      gravarLogServidor('painel aberto')
       app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) createWindow()
       })
@@ -460,7 +544,7 @@ app.whenReady().then(async () => {
     dialog.showMessageBoxSync(mainWindow ?? undefined!, {
       type: 'error',
       title: `${PRODUTO} — erro ao iniciar`,
-      message: `Falha ao iniciar o sistema:\n\n${msg}\n\nRegistro: %APPDATA%\\sistema-loja-tabacaria\\servidor-inicio.log`
+      message: `Falha ao iniciar o sistema:\n\n${msg}\n\nRegistro: ${getLogFilePath()}`
     })
   }
 

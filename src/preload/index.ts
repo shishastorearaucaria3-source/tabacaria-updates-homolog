@@ -12,6 +12,7 @@ const api = {
     login: (login: string, senha: string) => ipcRenderer.invoke('auth:login', login, senha),
     logout: () => ipcRenderer.invoke('auth:logout'),
     session: () => ipcRenderer.invoke('auth:session'),
+    usuarios: () => ipcRenderer.invoke('auth:usuarios'),
     criarUsuario: (dados: {
       nome: string
       login: string
@@ -87,7 +88,8 @@ const api = {
     zerar: (alvos: string[]) => ipcRenderer.invoke('servidor:zerar', alvos),
     restaurar: () => ipcRenderer.invoke('servidor:restaurar'),
     conexao: () => ipcRenderer.invoke('servidor:conexao'),
-    configurarConexao: (opcoes: { local?: boolean; ip?: string; url?: string; apiKey?: string }) =>
+    descobrir: () => ipcRenderer.invoke('servidor:descobrir'),
+    configurarConexao: (opcoes: { local?: boolean; ip?: string; url?: string }) =>
       ipcRenderer.invoke('servidor:configurarConexao', opcoes),
     testar: () => ipcRenderer.invoke('servidor:testar'),
     apiKeyGet: () => ipcRenderer.invoke('servidor:apiKeyGet'),
@@ -100,6 +102,12 @@ const api = {
     inventarioFinalizar: (dados: { inventario_id: number; usuario_id?: number | null }) =>
       ipcRenderer.invoke('estoque:inventarioFinalizar', dados),
     inventarioCancelar: (dados: { inventario_id: number }) => ipcRenderer.invoke('estoque:inventarioCancelar', dados)
+  },
+  whatsapp: {
+    login: (user: string, password: string) => ipcRenderer.invoke('whatsapp:login', user, password),
+    get: (path: string, token: string) => ipcRenderer.invoke('whatsapp:get', path, token),
+    post: (path: string, body: unknown, token: string) => ipcRenderer.invoke('whatsapp:post', path, body, token),
+    status: () => ipcRenderer.invoke('whatsapp:status')
   }
 }
 

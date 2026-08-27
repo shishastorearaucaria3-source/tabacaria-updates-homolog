@@ -7203,3 +7203,47 @@ textarea {
 }
 .inv-topo h3 { margin: 0; font-size: 17px; }
 .inv-sub { font-size: 13px; color: var(--texto2); margin-top: 2px; }
+
+/* ── WhatsApp Panel ── */
+.wa-login { display: flex; justify-content: center; padding-top: 8vh; }
+.wa-layout { display: flex; gap: 0; min-height: calc(100vh - 120px); }
+.wa-sidebar {
+  width: 200px; flex-shrink: 0; background: var(--card); border-right: 1px solid var(--borda);
+  padding: 8px; display: flex; flex-direction: column; gap: 2px; align-self: stretch;
+}
+.wa-nav-item {
+  display: block; width: 100%; text-align: left; background: none; border: none;
+  color: var(--texto2); padding: 7px 10px; border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+.wa-nav-item:hover { background: var(--fundo2); color: var(--texto); }
+.wa-nav-item.ativa { background: var(--fundo3); color: var(--texto); font-weight: 600; }
+.wa-conteudo { flex: 1; padding: 16px; overflow: auto; }
+.wa-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+.wa-card {
+  background: var(--card); border: 1px solid var(--borda); border-radius: 8px;
+  padding: 12px; display: flex; flex-direction: column; gap: 4px;
+}
+.wa-card span { color: var(--texto2); font-size: 12px; }
+.wa-card strong { font-size: 20px; }
+.wa-tag {
+  padding: 2px 8px; border-radius: 10px; font-size: 11px; display: inline-block;
+}
+.wa-tag.BOT { background: #12351f; color: #7ee2a0; }
+.wa-tag.AGUARDANDO_ATENDENTE { background: #3d3320; color: #ffd479; }
+.wa-tag.EM_ATENDIMENTO { background: #20304d; color: #9cc0ff; }
+.wa-tag.ENCERRADO { background: #3a2020; color: #ff9c9c; }
+.wa-chat {
+  max-height: 400px; overflow: auto; background: var(--fundo); border: 1px solid var(--borda);
+  border-radius: 8px; padding: 8px; margin: 8px 0;
+}
+.wa-msg {
+  white-space: pre-wrap; padding: 6px; border-bottom: 1px solid var(--borda); font-size: 13px;
+}
+.wa-msg.cliente .who { color: #ffd479; }
+.wa-msg.bot .who { color: #7ee2a0; }
+.wa-details { margin: 6px 0; padding: 8px; background: var(--card); border: 1px solid var(--borda); border-radius: 8px; }
+.wa-details summary { cursor: pointer; font-size: 13px; }
+.wa-pre {
+  background: var(--fundo); border: 1px solid var(--borda); border-radius: 6px;
+  padding: 6px; white-space: pre-wrap; font-size: 12px; max-height: 120px; overflow: auto; margin-top: 6px;
+}
