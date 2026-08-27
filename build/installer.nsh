@@ -1,5 +1,14 @@
 ; ============================================================================
 ; installer.nsh — NossoSistema NSIS custom installer
+;
+; O NSIS é o ÚNICO instalador do produto. Ele instala diretamente o aplicativo
+; real do sistema em C:\NossoSistema. NÃO existe setup-launcher, NÃO existe
+; segundo instalador, NÃO existe autoupdate/embedded — o usuário atualiza
+; simplesmente executando uma nova versão deste mesmo instalador.
+;
+; A elevação para Administrador (UAC) é garantida pelo assisted installer
+; (oneClick: false), que gera RequestExecutionLevel admin por padrão — então o
+; NSIS já grava em C:\NossoSistema sem depender de elevação via launcher.
 ; ============================================================================
 
 !macro customHeader
@@ -58,9 +67,108 @@
   FunctionEnd
 !macroend
 
+!macro NossoSistema_MatarApp
+  nsExec::ExecToLog 'taskkill /F /IM NossoSistema.exe >nul 2>&1'
+  nsExec::ExecToLog 'taskkill /F /IM NossoSistema-Servidor.exe >nul 2>&1'
+!macroend
+
 !macro customInstall
-  DetailPrint "Instalando componentes do sistema..."
-  ExecWait '"$INSTDIR\NossoSistema.exe" /S /TIPO=$NossoSistema_Tipo'
+  DetailPrint "Instalando NossoSistema (instalador único)..."
+  DetailPrint "Modo selecionado: $NossoSistema_Tipo"
+
+  ; 0) Se já existe uma instalação em modo servidor (indicado pela presença do
+  ;    NossoSistema-Servidor.exe), preserva esse tipo — mantém a configuração de
+  ;    servidor já instalada. Os dados em sistema-loja-tabacaria são preservados.
+  ${If} ${FileExists} "$INSTDIR\NossoSistema-Servidor.exe"
+    StrCpy $NossoSistema_Tipo "servidor"
+    DetailPrint "Instalação existente detectada — preservando modo SERVIDOR e dados."
+  ${EndIf}
+
+  ; 1) Encerra processos instalados (importante em atualização)
+  !insertmacro NossoSistema_MatarApp
+
+  ; 2) O pacote instala diretamente o aplicativo real (NossoSistema.exe).
+  ;    NÃO há setup-launcher, nem segundo instalador, nem payload embedded.
+  ${IfNot} ${FileExists} "$INSTDIR\NossoSistema.exe"
+    DetailPrint "ERRO: NossoSistema.exe não encontrado — abortando instalação."
+    Abort "Erro: os arquivos do sistema não foram encontrados no instalador."
+  ${EndIf}
+
+  ; 2b) Não pode sobrar arquivo com nome antigo do app portable.
+  ${If} ${FileExists} "$INSTDIR\Sistema Loja Tabacaria.exe"
+    Delete "$INSTDIR\Sistema Loja Tabacaria.exe"
+  ${EndIf}
+
+  ; 3) Em modo SERVIDOR, gera o processo servidor a partir do próprio aplicativo
+  ;    (o mesmo binário; o modo servidor é detectado pelo nome do executável).
+  ;    Isso NÃO duplica o aplicativo no instalador (cópia em tempo de instalação).
+  ${If} $NossoSistema_Tipo == "servidor"
+    DetailPrint "Instalando servidor local (NossoSistema-Servidor.exe)..."
+    CopyFiles /SILENT "$INSTDIR\NossoSistema.exe" "$INSTDIR\NossoSistema-Servidor.exe"
+  ${Else}
+    Delete "$INSTDIR\NossoSistema-Servidor.exe"
+  ${EndIf}
+
+  ; 4) Concede ACL de escrita ao usuário atual. Aplica somente ao usuário logado.
+  DetailPrint "Configurando permissões..."
+  ReadEnvStr $0 "USERNAME"
+  ${If} $0 != ""
+    nsExec::ExecToLog 'icacls "$INSTDIR" /grant "$0:(OI)(CI)M" /T /Q'
+  ${EndIf}
+
+  ; 5) Grava instalacao.json (tipo + versão)
+  FileOpen $0 "$INSTDIR\instalacao.json" w
+  FileWrite $0 '{$\"tipo$\":$\"$NossoSistema_Tipo$\",$\"versao$\":$\"${VERSION}$\",$\"instalado_em$\":$\"${__DATE__}$\"}'
+  FileClose $0
+
+  ; 6) Registros de desinstalação (chave oficial do produto)
+  ${If} $NossoSistema_Tipo == "servidor"
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\br.com.lojatabacaria.sistema" "DisplayName" "NossoSistema (Servidor + Sistema)"
+  ${Else}
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\br.com.lojatabacaria.sistema" "DisplayName" "NossoSistema (Somente Sistema)"
+  ${EndIf}
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\br.com.lojatabacaria.sistema" "DisplayVersion" "${VERSION}"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\br.com.lojatabacaria.sistema" "InstallLocation" "$INSTDIR"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\br.com.lojatabacaria.sistema" "Publisher" "NossoSistema"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\br.com.lojatabacaria.sistema" "UninstallString" '"$INSTDIR\NossoSistema.exe" --desinstalar'
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\br.com.lojatabacaria.sistema" "DisplayIcon" "$INSTDIR\NossoSistema.exe"
+  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\br.com.lojatabacaria.sistema" "NoModify" 1
+  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\br.com.lojatabacaria.sistema" "NoRepair" 1
+
+  ; 7) Servidor: firewall + autostart
+  ${If} $NossoSistema_Tipo == "servidor"
+    ${If} ${FileExists} "$INSTDIR\NossoSistema-Servidor.exe"
+      DetailPrint "Configurando servidor (firewall + autostart)..."
+      nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="NossoSistema Servidor"'
+      nsExec::ExecToLog 'netsh advfirewall firewall add rule name="NossoSistema Servidor" dir=in action=allow program="$INSTDIR\NossoSistema-Servidor.exe" enable=yes'
+      WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "NossoSistema Servidor" '"$INSTDIR\NossoSistema-Servidor.exe"'
+    ${EndIf}
+  ${Else}
+    nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="NossoSistema Servidor"'
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "NossoSistema Servidor"
+  ${EndIf}
+
+  ; 8) Cria atalhos (Desktop + Menu Iniciar)
+  DetailPrint "Criando atalhos..."
+  ${If} ${FileExists} "$INSTDIR\NossoSistema.exe"
+    CreateDirectory "$DESKTOP"
+    CreateShortcut "$DESKTOP\NossoSistema.lnk" "$INSTDIR\NossoSistema.exe" "" "$INSTDIR\resources\sistema.ico"
+    CreateDirectory "$SMPROGRAMS\NossoSistema"
+    CreateShortcut "$SMPROGRAMS\NossoSistema\NossoSistema.lnk" "$INSTDIR\NossoSistema.exe" "" "$INSTDIR\resources\sistema.ico"
+  ${EndIf}
+
+  ${If} $NossoSistema_Tipo == "servidor"
+    ${If} ${FileExists} "$INSTDIR\NossoSistema-Servidor.exe"
+      CreateShortcut "$DESKTOP\NossoSistema-Servidor.lnk" "$INSTDIR\NossoSistema-Servidor.exe" "" "$INSTDIR\resources\servidor.ico"
+      CreateShortcut "$SMPROGRAMS\NossoSistema\NossoSistema-Servidor.lnk" "$INSTDIR\NossoSistema-Servidor.exe" "" "$INSTDIR\resources\servidor.ico"
+    ${EndIf}
+  ${EndIf}
+
+  ; 9) Preserva os dados do usuário (C:\NossoSistema\sistema-loja-tabacaria) — o
+  ;    instalador NÃO apaga essa pasta. Dados, banco, configurações e backups
+  ;    permanecem intactos na atualização.
+
+  DetailPrint "Instalação concluída. Nenhum instalador adicional será aberto."
 !macroend
 
 !macro customUnInstall
