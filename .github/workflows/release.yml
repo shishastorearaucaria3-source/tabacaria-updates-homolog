@@ -53,13 +53,7 @@ jobs:
           Write-Output "Versão: $v"
           node -e "const fs=require('fs');const f='package.json';const j=JSON.parse(fs.readFileSync(f,'utf8'));j.version=process.argv[1];fs.writeFileSync(f,JSON.stringify(j,null,2)+'\n')" "$v"
 
-      - name: Build app + instalador NSIS
-        run: npm run package
-
-      - name: Build portátil (canal de atualização)
-        run: npm run package:portable
-
-      - name: Build instalador customizado (NossoSistema-Setup)
+      - name: Build instalador (NossoSistema-Setup)
         run: npm run package:setup
 
       # Authenticode (PREPARAÇÃO — ativa automaticamente quando o secret
@@ -79,9 +73,7 @@ jobs:
       - name: Gerar SHA256SUMS
         shell: pwsh
         run: |
-          $exes = @()
-          $exes += Get-ChildItem -LiteralPath 'dist-final' -Filter '*.exe' | ForEach-Object { $_.FullName }
-          $exes += Get-ChildItem -LiteralPath 'dist-setup' -Filter '*.exe' | ForEach-Object { $_.FullName }
+          $exes = Get-ChildItem -LiteralPath 'dist-setup' -Filter '*.exe' | ForEach-Object { $_.FullName }
           $lines = foreach ($e in $exes) {
             $h = (Get-FileHash -LiteralPath $e -Algorithm SHA256).Hash.ToLower()
             "{0}  {1}" -f $h, (Split-Path $e -Leaf)
@@ -105,9 +97,7 @@ jobs:
       - name: Assinar e verificar instaladores (keyless)
         shell: pwsh
         run: |
-          $exes = @()
-          $exes += Get-ChildItem -LiteralPath 'dist-final' -Filter '*.exe' | ForEach-Object { $_.FullName }
-          $exes += Get-ChildItem -LiteralPath 'dist-setup' -Filter '*.exe' | ForEach-Object { $_.FullName }
+          $exes = Get-ChildItem -LiteralPath 'dist-setup' -Filter '*.exe' | ForEach-Object { $_.FullName }
           New-Item -ItemType Directory -Path 'artifacts' -Force | Out-Null
           $identity = "https://github.com/$env:GITHUB_REPOSITORY/.github/workflows/release.yml@$env:GITHUB_REF"
           $issuer = 'https://token.actions.githubusercontent.com'
@@ -132,7 +122,6 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: false
           files: |
-            dist-final/*.exe
             dist-setup/*.exe
             artifacts/*.sigstore.json
             SHA256SUMS

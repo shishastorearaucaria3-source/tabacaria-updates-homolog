@@ -38,9 +38,8 @@ async function main() {
   const versao = pkg.version
   console.log(`[publicar] Publicando versão ${versao}${somenteMontar ? ' (somente montagem)' : ''}`)
 
-  // 1. Builds (o app embute o servidor — roda com --servidor; não gera exe separado)
+  // 1. Builds
   if (!somenteMontar) {
-    rodar('npm.cmd run package:portable')
     rodar('npm.cmd run package:setup')
   }
 
@@ -49,7 +48,6 @@ async function main() {
   mkdirSync(release, { recursive: true })
 
   const artefatos = [
-    { origem: join(raiz, 'dist-final', 'NossoSistema.exe'), nome: 'NossoSistema.exe' },
     { origem: join(raiz, 'dist-setup', 'NossoSistema-Setup.exe'), nome: 'NossoSistema-Setup.exe' }
   ]
 
