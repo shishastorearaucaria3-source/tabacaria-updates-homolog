@@ -216,7 +216,29 @@ export default function App() {
     return () => clearInterval(t)
   }, [usuario])
 
+  // Gate de acesso a módulos (uma fonte única). admin (permissoes === null) tem
+  // acesso a tudo; demais usuários precisam do módulo em 'permissoes'. Usado no
+  // menu, nos atalhos F3/F4/F5 e em toda navegação para não haver meio de burlar.
+  const temModulo = useCallback(
+    (mod: Tela) => {
+      if (usuario?.perfil === 'admin') return true
+      if (mod === 'usuarios') return usuario?.perfil === 'gerente' || (permissoes?.has('usuarios') ?? false)
+      if (!permissoes) return false
+      return permissoes.has(mod)
+    },
+    [usuario, permissoes]
+  )
+
   const irPdv = useCallback(async () => {
+    if (pdvFocado) {
+      setPdvFocado(true)
+      setFullscreen(true).catch(() => {})
+      return
+    }
+    if (usuario && !temModulo('pdv') && !temModulo('vendas')) {
+      setMsgBackup('Você não tem permissão para acessar o PDV.')
+      return
+    }
     if (!hasDbApi()) {
       setTela('pdv')
       setPdvFocado(true)
@@ -237,30 +259,42 @@ export default function App() {
     setTela('pdv')
     setPdvFocado(true)
     setFullscreen(true).catch(() => {})
-  }, [])
+  }, [usuario, temModulo])
 
   const editarPedido = useCallback((pedidoId: number) => {
+    if (usuario && !temModulo('pdv') && !temModulo('vendas')) {
+      setMsgBackup('Você não tem permissão para editar pedidos.')
+      return
+    }
     setPedidoEdicaoId(pedidoId)
     setTela('pdv')
     setPdvFocado(true)
     setFullscreen(true).catch(() => {})
-  }, [])
+  }, [usuario, temModulo])
 
   const novoPedido = useCallback(() => {
+    if (usuario && !temModulo('vendas')) {
+      setMsgBackup('Você não tem permissão para criar pedidos.')
+      return
+    }
     setModoPdv('pedido')
     setPedidoEdicaoId(null)
     setTela('pdv')
     setPdvFocado(true)
     setFullscreen(true).catch(() => {})
-  }, [])
+  }, [usuario, temModulo])
 
   const novoOrcamento = useCallback(() => {
+    if (usuario && !temModulo('vendas')) {
+      setMsgBackup('Você não tem permissão para criar orçamentos.')
+      return
+    }
     setModoPdv('orcamento')
     setPedidoEdicaoId(null)
     setTela('pdv')
     setPdvFocado(true)
     setFullscreen(true).catch(() => {})
-  }, [])
+  }, [usuario, temModulo])
 
   const sairPdv = useCallback(() => {
     setPedidoEdicaoId(null)
@@ -315,7 +349,7 @@ export default function App() {
       irPdv()
       return
     }
-    if (permissoes && !permissoes.has(item.id)) {
+    if (!temModulo(item.id)) {
       setMsgBackup('Você não tem permissão para acessar este módulo.')
       return
     }
@@ -324,7 +358,7 @@ export default function App() {
     setMsgBackup('')
   }
 
-  const menuVisivel = MENU_GESTAO.filter((m) => !m.admin || usuario.perfil === 'admin')
+  const menuVisivel = MENU_GESTAO.filter((m) => !m.admin || temModulo(m.id))
 
   if (pdvFocado) {
     return (
@@ -352,10 +386,21 @@ export default function App() {
     )
   }
 
+  const navegarPara = (t: string) => {
+    const alvo = t as Tela
+    if (!temModulo(alvo)) {
+      setMsgBackup('Você não tem permissão para acessar este módulo.')
+      return
+    }
+    setProdutoEdicaoId(null)
+    setTela(alvo)
+    setMsgBackup('')
+  }
+
   const renderTela = () => {
     switch (tela) {
       case 'inicio':
-        return <Home usuarioNome={usuario.nome} onAbrirPdv={irPdv} onNavegar={(t) => setTela(t as Tela)} />
+        return <Home usuarioNome={usuario.nome} onAbrirPdv={irPdv} onNavegar={navegarPara} />
       case 'produtos':
         return <Produtos />
       case 'clientes':
@@ -369,15 +414,15 @@ export default function App() {
       case 'comissoes':
         return <Comissoes />
       case 'relatorios':
-        return <Relatorios onNavegar={(t) => setTela(t as Tela)} usuarioNome={usuario.nome} />
+        return <Relatorios onNavegar={navegarPara} usuarioNome={usuario.nome} />
       case 'usuarios':
-        return usuario.perfil === 'admin' || (permissoes?.has('usuarios')) ? <Usuarios /> : <Pdv />
+        return temModulo('usuarios') ? <Usuarios /> : <Pdv />
       case 'delivery':
         return <Delivery />
       case 'zonas':
         return <Zonas />
       case 'catalogo':
-        return <CatalogoOnline onNavegar={(t) => setTela(t as Tela)} usuarioNome={usuario.nome} />
+        return <CatalogoOnline onNavegar={navegarPara} usuarioNome={usuario.nome} />
       case 'caixa':
         return caixaTransacoesId != null ? (
           <CaixaTransacoes caixaId={caixaTransacoesId} onVoltar={() => setCaixaTransacoesId(null)} />
@@ -394,7 +439,7 @@ export default function App() {
       case 'sobre':
         return <EmBreve titulo={MENU_PRINCIPAL.find((m) => m.id === tela)?.label ?? ''} />
       default:
-        return <Home usuarioNome={usuario.nome} onAbrirPdv={irPdv} onNavegar={(t) => setTela(t as Tela)} />
+        return <Home usuarioNome={usuario.nome} onAbrirPdv={irPdv} onNavegar={navegarPara} />
     }
   }
 

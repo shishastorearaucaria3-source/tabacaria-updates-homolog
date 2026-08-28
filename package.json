@@ -1,6 +1,6 @@
 {
   "name": "sistema-loja-tabacaria",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "description": "Sistema de gestão para loja de tabacaria: PVD balcão, estoque, financeiro, CRM, comissão e delivery online",
   "main": "out/main/index.js",
   "author": "Loja Tabacaria",

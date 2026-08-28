@@ -22,6 +22,10 @@ export interface VendasCancelApi {
     vendedor_id?: number | null
     caixa_id?: number | null
     usuario_id?: number | null
+    cliente_id?: number | null
+    observacoes?: string | null
+    taxa_entrega?: number
+    cliente_endereco?: string | null
   }) => Promise<{ ok: boolean; numero: string; venda_id: number; erro?: string; codigo?: string }>
 }
 
@@ -68,6 +72,16 @@ export interface AuthApi {
     comissao: number
     senha?: string
   }) => Promise<{ ok: boolean }>
+  atualizarOpcoes: (dados: {
+    usuarioId: number
+    usar_web: boolean
+    usar_app: boolean
+    limitar_desconto: boolean
+    desconto_max_percent: number
+  }) => Promise<{ ok: boolean }>
+  atualizarPermissoes: (dados: { usuarioId: number; modulos: string[] }) => Promise<{ ok: boolean }>
+  ativarDesativar: (dados: { usuarioId: number; ativo: boolean }) => Promise<{ ok: boolean }>
+  deletar: (dados: { usuarioId: number }) => Promise<{ ok: boolean }>
 }
 
 export interface AppApi {

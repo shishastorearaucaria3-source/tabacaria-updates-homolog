@@ -150,6 +150,13 @@ export default function Produtos({ produtoEdicaoId }: { produtoEdicaoId?: number
   const [subcategoriaSel, setSubcategoriaSel] = useState<number | null>(null)
   const [categoriasLateralAberta, setCategoriasLateralAberta] = useState(true)
   const [categoriasExpandidas, setCategoriasExpandidas] = useState<Record<number, boolean>>({})
+  const [gerenciarCats, setGerenciarCats] = useState(false)
+  const [novaCat, setNovaCat] = useState('')
+  const [novaSub, setNovaSub] = useState<Record<number, string>>({})
+  const [editandoCat, setEditandoCat] = useState<number | null>(null)
+  const [edicaoCatNome, setEdicaoCatNome] = useState('')
+  const [editandoSub, setEditandoSub] = useState<number | null>(null)
+  const [edicaoSubNome, setEdicaoSubNome] = useState('')
   const [filtrosAbertos, setFiltrosAbertos] = useState(false)
   const [menuLayout, setMenuLayout] = useState(false)
   const [modalConfig, setModalConfig] = useState(false)
@@ -416,6 +423,94 @@ export default function Produtos({ produtoEdicaoId }: { produtoEdicaoId?: number
       setMarcas(rows as unknown as Marca[])
     })
   }, [])
+
+  const recarregarCategorias = useCallback(() => {
+    getDbApi().all('SELECT id, nome FROM categorias ORDER BY nome').then((rows) => {
+      setCategorias(rows as unknown as Categoria[])
+    })
+    getDbApi().all('SELECT id, categoria_id, nome FROM subcategorias ORDER BY nome').then((rows) => {
+      setSubcategorias(rows as unknown as Subcategoria[])
+    })
+  }, [])
+
+  const adicionarCategoria = async () => {
+    const nome = novaCat.trim()
+    if (!nome) return
+    try {
+      await getDbApi().run('INSERT INTO categorias (nome) VALUES (?)', [nome])
+      setNovaCat('')
+      setEditandoCat(null)
+      setEdicaoCatNome('')
+      setMensagem(`Categoria "${nome}" adicionada.`)
+      recarregarCategorias()
+    } catch (e) {
+      setMensagem(`Erro ao adicionar categoria: ${(e as Error).message}`)
+    }
+  }
+
+  const salvarCategoria = async (id: number) => {
+    const nome = edicaoCatNome.trim()
+    if (!nome) return
+    try {
+      await getDbApi().run('UPDATE categorias SET nome = ? WHERE id = ?', [nome, id])
+      setEditandoCat(null)
+      setEdicaoCatNome('')
+      setMensagem('Categoria atualizada.')
+      recarregarCategorias()
+    } catch (e) {
+      setMensagem(`Erro ao atualizar categoria: ${(e as Error).message}`)
+    }
+  }
+
+  const excluirCategoria = async (id: number, nome: string) => {
+    if (!window.confirm(`Excluir a categoria "${nome}"? Os produtos ficarão sem categoria e as subcategorias serão removidas.`)) return
+    try {
+      await getDbApi().run('UPDATE produtos SET categoria_id = NULL, subcategoria_id = NULL WHERE categoria_id = ?', [id])
+      await getDbApi().run('DELETE FROM subcategorias WHERE categoria_id = ?', [id])
+      await getDbApi().run('DELETE FROM categorias WHERE id = ?', [id])
+      setMensagem('Categoria excluída.')
+      recarregarCategorias()
+    } catch (e) {
+      setMensagem(`Erro ao excluir categoria: ${(e as Error).message}`)
+    }
+  }
+
+  const adicionarSubcategoria = async (categoriaId: number) => {
+    const nome = (novaSub[categoriaId] ?? '').trim()
+    if (!nome) return
+    try {
+      await getDbApi().run('INSERT INTO subcategorias (categoria_id, nome) VALUES (?, ?)', [categoriaId, nome])
+      setNovaSub((p) => ({ ...p, [categoriaId]: '' }))
+      setMensagem(`Subcategoria "${nome}" adicionada.`)
+      recarregarCategorias()
+    } catch (e) {
+      setMensagem(`Erro ao adicionar subcategoria: ${(e as Error).message}`)
+    }
+  }
+
+  const salvarSubcategoria = async (id: number) => {
+    const nome = edicaoSubNome.trim()
+    if (!nome) return
+    try {
+      await getDbApi().run('UPDATE subcategorias SET nome = ? WHERE id = ?', [nome, id])
+      setEditandoSub(null)
+      setEdicaoSubNome('')
+      recarregarCategorias()
+    } catch (e) {
+      setMensagem(`Erro ao atualizar subcategoria: ${(e as Error).message}`)
+    }
+  }
+
+  const excluirSubcategoria = async (id: number, nome: string) => {
+    if (!window.confirm(`Excluir a subcategoria "${nome}"?`)) return
+    try {
+      await getDbApi().run('UPDATE produtos SET subcategoria_id = NULL WHERE subcategoria_id = ?', [id])
+      await getDbApi().run('DELETE FROM subcategorias WHERE id = ?', [id])
+      recarregarCategorias()
+    } catch (e) {
+      setMensagem(`Erro ao excluir subcategoria: ${(e as Error).message}`)
+    }
+  }
 
   useEffect(() => {
     if (formAberto) {
@@ -781,6 +876,17 @@ export default function Produtos({ produtoEdicaoId }: { produtoEdicaoId?: number
               <path d="M22 3H2l8 9.46V19l4 2v-8.54z" />
             </svg>
             Categorias
+          </button>
+
+          <button
+            className="btn-secundario"
+            onClick={() => { setGerenciarCats(true); setCategoriasLateralAberta(true) }}
+            title="Criar, editar ou apagar categorias"
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+            </svg>
+            Gerenciar Categorias
           </button>
 
           <div className="busca-pdv-caixa produtos-busca-pdv">
@@ -1450,6 +1556,73 @@ export default function Produtos({ produtoEdicaoId }: { produtoEdicaoId?: number
                 setMensagem(`Configuração salva: código com ${digitosCodigo} dígitos.`)
               }}>Salvar</button>
             </div>
+          </div>
+        </div>
+      )}
+      {gerenciarCats && (
+        <div className="modal-overlay" onClick={() => setGerenciarCats(false)}>
+          <div className="modal modal-produto" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-topo">
+              <h3>Gerenciar Categorias</h3>
+              <button className="btn-icone" onClick={() => setGerenciarCats(false)}>✕</button>
+            </div>
+            <div className="form-grid">
+              <label style={{ gridColumn: '1 / -1' }}>Nova categoria
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input value={novaCat} onChange={(e) => setNovaCat(e.target.value)} placeholder="Nome da categoria" />
+                  <button className="btn-primario" onClick={adicionarCategoria}>Adicionar</button>
+                </div>
+              </label>
+            </div>
+            <div className="config-pdv-lista">
+              {categorias.length === 0 && <p className="sem-resultado">Nenhuma categoria cadastrada.</p>}
+              {categorias.map((cat) => {
+                const subs = subcategorias.filter((s) => s.categoria_id === cat.id)
+                return (
+                  <div key={cat.id} className="config-pdv-item" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+                      {editandoCat === cat.id ? (
+                        <>
+                          <input value={edicaoCatNome} onChange={(e) => setEdicaoCatNome(e.target.value)} placeholder="Novo nome" />
+                          <button className="btn-primario" onClick={() => salvarCategoria(cat.id)}>Salvar</button>
+                          <button className="btn-secundario" onClick={() => setEditandoCat(null)}>Cancelar</button>
+                        </>
+                      ) : (
+                        <>
+                          <div className="config-pdv-info"><strong>{cat.nome}</strong></div>
+                          <button className="btn-mini" onClick={() => { setEditandoCat(cat.id); setEdicaoCatNome(cat.nome) }}>Editar</button>
+                          <button className="btn-mini" onClick={() => excluirCategoria(cat.id, cat.nome)}>Apagar</button>
+                        </>
+                      )}
+                    </div>
+                    <div style={{ paddingLeft: 18, marginTop: 6 }}>
+                      {subs.map((s) => (
+                        <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' }}>
+                          {editandoSub === s.id ? (
+                            <>
+                              <input value={edicaoSubNome} onChange={(e) => setEdicaoSubNome(e.target.value)} placeholder="Novo nome" />
+                              <button className="btn-mini" onClick={() => salvarSubcategoria(s.id)}>Salvar</button>
+                              <button className="btn-mini" onClick={() => setEditandoSub(null)}>Cancelar</button>
+                            </>
+                          ) : (
+                            <>
+                              <div className="config-pdv-info"><span>{s.nome}</span></div>
+                              <button className="btn-mini" onClick={() => { setEditandoSub(s.id); setEdicaoSubNome(s.nome) }}>Editar</button>
+                              <button className="btn-mini" onClick={() => excluirSubcategoria(s.id, s.nome)}>Apagar</button>
+                            </>
+                          )}
+                        </div>
+                      ))}
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4 }}>
+                        <input value={novaSub[cat.id] ?? ''} onChange={(e) => setNovaSub((p) => ({ ...p, [cat.id]: e.target.value }))} placeholder="Nova subcategoria" style={{ flex: 1 }} />
+                        <button className="btn-mini" onClick={() => adicionarSubcategoria(cat.id)}>+</button>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+            <div className="modal-acoes"><button className="btn-primario" onClick={() => setGerenciarCats(false)}>Fechar</button></div>
           </div>
         </div>
       )}

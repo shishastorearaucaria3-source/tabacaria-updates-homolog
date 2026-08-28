@@ -252,8 +252,6 @@ function renderImportar(c){
     '<input type="file" id="nexArquivo" accept=".zip" style="display:none" onchange="enviarNex(this)"><button class="primario" onclick="document.getElementById(\'nexArquivo\').click()">Selecionar ZIP Nex</button></div>'+
     '<div class="acao"><div class="info"><strong>Analisar Backup Nex</strong><span>Verifica as estruturas encontradas no ZIP sem importar nada (dry-run)</span></div>'+
     '<input type="file" id="nexAnalise" accept=".zip" style="display:none" onchange="analisarNexFile(this)"><button onclick="document.getElementById(\'nexAnalise\').click()" style="padding:8px 14px;border-radius:8px;border:1px solid var(--line);background:var(--card2);color:var(--text);font-size:12px;cursor:pointer;font-family:inherit">Analisar ZIP</button></div>'+
-    '<div class="acao"><div class="info"><strong>Simular Importação</strong><span>Processa tudo e gera relatório sem gravar nada no banco</span></div>'+
-    '<input type="file" id="nexSimular" accept=".zip" style="display:none" onchange="simularNex(this)"><button onclick="document.getElementById(\'nexSimular\').click()" style="padding:8px 14px;border-radius:8px;border:1px solid var(--line);background:var(--card2);color:var(--text);font-size:12px;cursor:pointer;font-family:inherit">Simular Importação</button></div>'+
     '<div class="acao"><div class="info"><strong>Enviar arquivo ZIP</strong><span>Selecione um .zip com as planilhas de produtos dentro</span></div>'+
     '<input type="file" id="impArquivo" accept=".zip" style="display:none" onchange="enviarZip(this)"><button class="primario" onclick="document.getElementById(\'impArquivo\').click()">Selecionar ZIP</button></div></div>'+
     '<div id="impStatus" style="margin-top:14px;font-size:13px;color:var(--muted)">Nenhum arquivo enviado ainda.</div>'+
@@ -334,34 +332,6 @@ async function analisarNexFile(input){
       mostrarMsg('Análise concluída — nenhum dado foi importado',true)
     }else{
       if(st) st.innerHTML='<span style="color:var(--red)">Erro na análise: '+esc(d.relatorio&&d.relatorio.erro||'falha')+'</span>'
-    }
-    input.value=''
-  }catch(e){
-    mostrarProgresso({ativo:false})
-    if(st) st.innerHTML='<span style="color:var(--red)">Erro: '+esc(e.message)+'</span>'
-  }
-}
-
-async function simularNex(input){
-  const arquivo=input.files&&input.files[0]
-  if(!arquivo) return
-  const st=document.getElementById('impStatus')
-  if(st) st.textContent='Simulando importação de '+arquivo.name+' (nada será gravado)...'
-  iniciarPollingNex()
-  try{
-    const r=await fetch(baseUrl+'/api/importar/nex',{
-      method:'POST',
-      headers:{'Content-Type':'application/octet-stream','x-zip-nome':encodeURIComponent(arquivo.name),'x-simular':'1'},
-      body:arquivo
-    })
-    const d=await r.json()
-    mostrarProgresso({ativo:false})
-    if(d.ok&&d.resumo){
-      const s=d.resumo
-      if(st) st.innerHTML='<span style="color:var(--green)">🧪 SIMULAÇÃO (nada gravado): '+s.produtosCriados+' produtos, '+s.clientesCriados+' clientes, '+s.vendasCriadas+' vendas, '+s.itensImportados+' itens, '+s.pagamentosImportados+' pagamentos, '+s.brutosPreservados+' estruturas preservadas em bruto</span>'
-      mostrarMsg('Simulação concluída — nenhum dado foi gravado no banco',true)
-    }else{
-      if(st) st.innerHTML='<span style="color:var(--red)">Erro: '+esc(d.erro||'Falha')+'</span>'
     }
     input.value=''
   }catch(e){

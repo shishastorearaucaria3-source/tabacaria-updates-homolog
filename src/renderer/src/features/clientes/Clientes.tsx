@@ -38,6 +38,8 @@ interface Cliente {
   categoria_nome: string | null
 }
 
+export type { Cliente }
+
 interface CategoriaCliente {
   id: number
   nome: string
@@ -75,7 +77,7 @@ const clienteVazio = {
   info_extras: '', vip: false, categoria_compra: 'varejo', tem_credito: false, valor_cred: ''
 }
 
-export default function Clientes() {
+export default function Clientes({ onSelecionar, onFechar }: { onSelecionar?: (c: Cliente) => void; onFechar?: () => void }) {
   const [clientes, setClientes] = useState<Cliente[]>([])
   const [categorias, setCategorias] = useState<CategoriaCliente[]>([])
   const [busca, setBusca] = useState('')
@@ -333,6 +335,7 @@ export default function Clientes() {
       <div className="page-header">
         <h2>Clientes</h2>
         <div className="page-acoes">
+          {onFechar && <button className="btn-secundario" onClick={onFechar}>← Voltar ao PDV</button>}
           <input className="busca" value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Filtrar por nome, CPF, código..." />
           <select className="pedido-config-select" value={filtroCat} onChange={(e) => setFiltroCat(e.target.value)}>
             <option value="">Todas as categorias</option>
@@ -407,6 +410,7 @@ export default function Clientes() {
                   <button className="btn-mini" onClick={() => abrirVer(c)}>Ver</button>
                   <button className="btn-mini" onClick={() => abrirEdicao(c)}>Editar</button>
                   {c.debito > 0 && <button className="btn-mini" onClick={() => registrarPagamento(c)}>Receber</button>}
+                  {onSelecionar && <button className="btn-mini btn-primario" onClick={() => onSelecionar(c)}>Selecionar</button>}
                 </td>
                 {colunasVisiveis.map((col) => <td key={col.chave}>{celula(c, col.chave)}</td>)}
               </tr>

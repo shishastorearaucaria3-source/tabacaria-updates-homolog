@@ -1,5 +1,6 @@
 import { getDb, getDefaultDbPath, hashSenha } from './index'
 import { registrarLog } from './servidor'
+import { lerItensMovEst, lerVendasTran } from './nex-binary'
 import AdmZip from 'adm-zip'
 import { join } from 'node:path'
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
@@ -268,69 +269,180 @@ function extrairVendas(buf: Buffer): Record<string, unknown>[] {
   const vendas: Record<string, unknown>[] = []
   // procurar TranNome "Venda" em UTF-16
   const s = 'Venda'
-  for (let i = 0; i < tam - s.length * 2; i++) {
+  const vendaUtf16 = Buffer.from(s, 'utf16le')
+  for (let i = 0; i <= tam - vendaUtf16.length; i++) {
     let ok = true
     for (let k = 0; k < s.length; k++) {
       if (buf[i + k * 2] !== s.charCodeAt(k) || buf[i + k * 2 + 1] !== 0) { ok = false; break }
     }
     if (!ok) continue
-    // validar que é TranNome (precedido por 04) e extrair data/operador
+    // validar que é TranNome: byte imediatamente antes é 0x04
+    if (i - 1 < 0 || buf[i - 1] !== 0x04) { i += s.length * 2 - 1; continue }
+    // data: .NET datetime em offset relativo preferencial (-13 = DataHora da venda,
+    // -39 = IncluidoEm); fallback para qualquer .NET datetime na janela
     let dataHora: string | null = null
-    for (let base = i - 80; base <= i - 79; base++) {
-      for (let o = base; o < i; o += 2) {
+    for (const rel of [-13, -14, -12, -39, -40, -38]) {
+      const o = i + rel
+      if (o >= 0 && o + 8 <= tam) {
         const d = converterDataNex(buf.readDoubleLE(o))
         if (d) {
           const ano = Number(d.slice(0, 4))
-          if (ano >= 2010 && ano <= 2027) dataHora = d
+          if (ano >= 2010 && ano <= 2027) { dataHora = d; break }
         }
       }
     }
-    // operador: string ASCII após "Venda"(10 bytes) + terminator
-    let operador: string | null = null
-    let fimOp = 0
-    for (let o = i + 10; o < i + 40; o++) {
-      const b = buf[o]
-      if (b === 0x00) continue
-      if (b >= 0x41 && b < 0x7f) {
-        let j = o, chars: number[] = []
-        while (j < i + 60 && buf[j] >= 0x20 && buf[j] < 0x7f) { chars.push(buf[j]); j++ }
-        const sOp = Buffer.from(chars).toString('latin1')
-        if (chars.length >= 3 && /^[A-Za-zÀ-ÿ0-9 ]+$/.test(sOp)) { operador = sOp; fimOp = j; break }
+    if (!dataHora) {
+      for (let o = i - 40; o <= i - 4; o++) {
+        if (o + 8 <= tam) {
+          const d = converterDataNex(buf.readDoubleLE(o))
+          if (d) {
+            const ano = Number(d.slice(0, 4))
+            if (ano >= 2010 && ano <= 2027) { dataHora = d; break }
+          }
+        }
       }
     }
-    if (!dataHora || !operador) continue
-    vendas.push({ data: dataHora, operador, idNex: null, offset: i })
-    i += 5 * 2 - 1
+    if (dataHora) vendas.push({ data: dataHora, operador: null, idNex: null, offset: i })
+    i += s.length * 2 - 1
   }
   return vendas
 }
 
+// Vendas do Tran.nx1 pelo parser binário (id + caixa), enriquecidas com a data
+// extraída pela heurística legada. Retorna uma entrada por venda com id, uid, caixa,
+// data (quando disponível) e o mapa id->data para pareamento exato por tran.
+function extrairVendasComId(buf: Buffer): Record<string, unknown>[] {
+  const bin = lerVendasTran(buf)
+  // data por venda (heurística legada): id lido no offset binário
+  const datas = new Map<number, string>()
+  const s = 'Venda'
+  const vendaUtf16 = Buffer.from(s, 'utf16le')
+  for (let i = 0; i <= buf.length - vendaUtf16.length; i++) {
+    let ok = true
+    for (let k = 0; k < s.length; k++) {
+      if (buf[i + k * 2] !== s.charCodeAt(k) || buf[i + k * 2 + 1] !== 0) { ok = false; break }
+    }
+    if (!ok) continue
+    if (i - 1 < 0 || buf[i - 1] !== 0x04) { i += s.length * 2 - 1; continue }
+    const id = buf.readInt32LE(i - 138)
+    let dataHora: string | null = null
+    for (const rel of [-13, -14, -12, -39, -40, -38]) {
+      const o = i + rel
+      if (o >= 0 && o + 8 <= buf.length) {
+        const d = converterDataNex(buf.readDoubleLE(o))
+        if (d) { const ano = Number(d.slice(0, 4)); if (ano >= 2010 && ano <= 2027) { dataHora = d; break } }
+      }
+    }
+    if (!dataHora) {
+      for (let o = i - 40; o <= i - 4; o++) {
+        if (o + 8 <= buf.length) {
+          const d = converterDataNex(buf.readDoubleLE(o))
+          if (d) { const ano = Number(d.slice(0, 4)); if (ano >= 2010 && ano <= 2027) { dataHora = d; break } }
+        }
+      }
+    }
+    if (id > 0 && id < 5e8 && dataHora) datas.set(id, dataHora)
+    i += s.length * 2 - 1
+  }
+  return bin.map((v) => ({
+    id: v.id,
+    uid: v.uid,
+    caixa: v.caixa,
+    data: datas.get(v.id) ?? null,
+  }))
+}
+
+// Itens do MovEst.nx1 pelo parser binário (produto/quant/unit/total), vinculados
+// à venda pelo campo tran (id da venda). Substitui a extração falha do ITran.
+function extrairItensMovEst(buf: Buffer): Record<string, unknown>[] {
+  return lerItensMovEst(buf).map((it) => ({
+    tran: it.tran,
+    produtoNex: it.produtoId,
+    produtoUid: it.produtoUid,
+    quant: it.quant,
+    unit: it.unit,
+    total: it.total,
+    uid: it.uid,
+  }))
+}
+
 // --- EXTRAÇÃO DE ITENS (ITran.nx1) ---
+// Detecta o formato físico do ITran (168B legado do ZIP ou 232B variável da pasta Dados)
+// e extrai os itens de forma best-effort, preservando a referência de produto (+160).
 function extrairItens(buf: Buffer): Record<string, unknown>[] {
   const itens: Record<string, unknown>[] = []
-  let i = 24576
-  while (i < buf.length - 168) {
+  // amostra de marcadores para detectar o stride dominante
+  const gaps: Record<number, number> = {}
+  let ultimo = -1
+  let amostras = 0
+  for (let x = 24576; x + 4 < buf.length && amostras < 20000; x++) {
+    if (buf[x] === 0x28 && buf[x + 1] === 0x00 && buf[x + 2] === 0x10 && buf[x + 3] === 0xc0) {
+      if (ultimo >= 0) {
+        const g = x - ultimo
+        gaps[g] = (gaps[g] || 0) + 1
+      }
+      ultimo = x
+      amostras++
+      x += 3
+    }
+  }
+  let stride = 168
+  if (Object.keys(gaps).length > 0) {
+    const dom = Object.entries(gaps).sort((a, b) => b[1] - a[1])[0]
+    stride = Number(dom[0])
+  }
+  const variado = stride >= 200
+  // Formato legado (168B, ZIP): campos em offsets fixos com data
+  if (!variado) {
+    let i = 24576
+    while (i < buf.length - 168) {
+      if (buf[i] === 0x28 && buf[i + 1] === 0x00 && buf[i + 2] === 0x10 && buf[i + 3] === 0xc0) {
+        const id = buf.readUInt32LE(i + 4)
+        const venda = buf.readUInt32LE(i + 24)
+        const produto = buf.readUInt32LE(i + 160)
+        const tipo = buf.readUInt32LE(i + 164)
+        const caixa = buf.readUInt32LE(i + 28)
+        const data = converterDataNex(buf.readDoubleLE(i + 44))
+        if (id > 0 && id < 1000000 && venda < 1000000) {
+          itens.push({
+            idNex: id,
+            vendaNex: venda,
+            produtoNex: produto,
+            tipo,
+            caixa,
+            data,
+            bytesBrutos: buf.slice(i, i + 168).toString('hex')
+          })
+        }
+        i += 168
+      } else {
+        i += 2
+      }
+    }
+    return itens
+  }
+  // Formato variado (232B, pasta Dados): andar por cada marcador e validar
+  // pelo caixa (+176) e id do item (+12); produto (+160) fica best-effort.
+  for (let i = 24576; i + 240 < buf.length; i++) {
     if (buf[i] === 0x28 && buf[i + 1] === 0x00 && buf[i + 2] === 0x10 && buf[i + 3] === 0xc0) {
-      const id = buf.readUInt32LE(i + 4)
-      const venda = buf.readUInt32LE(i + 24)
-      const produto = buf.readUInt32LE(i + 160)
-      const tipo = buf.readUInt32LE(i + 164)
-      const caixa = buf.readUInt32LE(i + 28)
-      const data = converterDataNex(buf.readDoubleLE(i + 44))
-      if (id > 0 && id < 1000000 && venda < 1000000) {
+      const id = buf.readUInt32LE(i + 12)
+      const caixa = buf.readUInt32LE(i + 176)
+      if (id > 0 && id < 1000000000 && caixa >= 1000 && caixa < 10000) {
+        const venda = buf.readUInt32LE(i + 28)
+        const produto = buf.readUInt32LE(i + 160)
+        const produto2 = buf.readUInt32LE(i + 84)
         itens.push({
           idNex: id,
-          vendaNex: venda,
-          produtoNex: produto,
-          tipo,
-          caixa,
-          data,
-          bytesBrutos: buf.slice(i, i + 168).toString('hex')
+          vendaNex: venda > 0 && venda < 1000000000 ? venda : null,
+          produtoNex: produto > 0 && produto < 1000000000 ? produto : null,
+          produtoNex2: produto2 > 0 && produto2 < 1000000000 ? produto2 : null,
+          tipo: null,
+          caixa: caixa > 0 && caixa < 1000000000 ? caixa : null,
+          data: null,
+          bytesBrutos: buf.slice(i, i + 240).toString('hex')
         })
+        i += 3
       }
-      i += 168
-    } else {
-      i += 2
     }
   }
   return itens
@@ -457,36 +569,37 @@ function extrairUsuarios(buf: Buffer): Record<string, unknown>[] {
 }
 
 function extrairCaixas(buf: Buffer): Record<string, unknown>[] {
-  const logs: { s: string }[] = []
-  for (let i = 0; i < buf.length - 4; i++) {
-    const t = buf.readUInt16LE(i)
-    if (buf[i + 2] !== 0x04 || t === 0 || t > 20000) continue
-    const nChars = Math.floor(t / 2)
-    let s = ''
-    for (let j = 0; j < nChars; j++) {
-      s += String.fromCharCode(buf[i + 3 + j * 2] | (buf[i + 4 + j * 2] << 8))
-    }
-    if (s.includes('Usuário:') && s.includes('caixa')) logs.push({ s })
-  }
-  const eventos: { usuario: string; acao: string; dataHora: string }[] = []
-  for (const log of logs) {
-    const linhas = log.s.split('\r\n')
-    for (const linha of linhas) {
-      const m = linha.match(/Usuário:\s*(.+?)\s+(reabriu|fechou|abriu)\s+o caixa em\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2}:\d{2})/)
-      if (m) eventos.push({ usuario: m[1].trim(), acao: m[2], dataHora: m[3] + ' ' + m[4] })
-    }
-  }
   const caixas: Record<string, unknown>[] = []
-  for (let i = 0; i < eventos.length; i++) {
-    const e = eventos[i]
-    if (e.acao === 'reabriu' || e.acao === 'abriu') {
-      const fechou = eventos.slice(i + 1).find(x => x.acao === 'fechou')
+  for (let i = 0; i < buf.length; i++) {
+    const b = buf[i]
+    if (b < 0x41 || b >= 0x7f) continue
+    let j = i
+    const ch: number[] = []
+    while (j < buf.length && buf[j] >= 0x20 && buf[j] < 0x7f && j - i < 40) { ch.push(buf[j]); j++ }
+    const nome = Buffer.from(ch).toString('latin1')
+    if (nome.length < 2 || !/^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ0-9 ._-]*$/.test(nome)) { i = j - 1; continue }
+    const fimNome = j
+    let aberto = ''
+    let abertoOff = -1
+    for (let o = fimNome + 5; o < fimNome + 45 && o + 8 <= buf.length; o++) {
+      const d = converterDataNex(buf.readDoubleLE(o))
+      if (d) { aberto = d; abertoOff = o; break }
+    }
+    let fechado: string | null = null
+    if (abertoOff >= 0) {
+      for (let o = abertoOff + 4; o < abertoOff + 20 && o + 8 <= buf.length; o++) {
+        const d = converterDataNex(buf.readDoubleLE(o))
+        if (d) { fechado = d; break }
+      }
+    }
+    if (aberto) {
       caixas.push({
-        usuario: e.usuario,
-        aberto_em: e.dataHora,
-        fechado_em: fechou ? fechou.dataHora : null
+        usuario: nome.toLowerCase(),
+        aberto_em: aberto.slice(0, 19).replace('T', ' '),
+        fechado_em: fechado ? fechado.slice(0, 19).replace('T', ' ') : null
       })
     }
+    i = fimNome - 1
   }
   return caixas
 }
@@ -739,8 +852,8 @@ function montarImportacao(bufs: Map<string, Buffer>): DadosNex {
   const ncmCadastro = bufs.has('NCM.nx1') ? extrairCadastroAscii(bufs.get('NCM.nx1')!, /^\d{8}$/) : []
   const cestCadastro = bufs.has('br_cest.nx1') ? extrairCadastroAscii(bufs.get('br_cest.nx1')!, /^\d{7}$/) : []
   const cfopCadastro = bufs.has('CFOP.nx1') ? extrairCadastroAscii(bufs.get('CFOP.nx1')!, /^\d{4}$/) : []
-  const vendas = bufs.has('Tran.nx1') ? extrairVendas(bufs.get('Tran.nx1')!) : []
-  const itens = bufs.has('ITran.nx1') ? extrairItens(bufs.get('ITran.nx1')!) : []
+  const vendas = bufs.has('Tran.nx1') ? extrairVendasComId(bufs.get('Tran.nx1')!) : []
+  const itens = bufs.has('MovEst.nx1') ? extrairItensMovEst(bufs.get('MovEst.nx1')!) : []
   const pagamentos = bufs.has('PagEspecies.nx1') ? extrairPagamentos(bufs.get('PagEspecies.nx1')!) : []
   const naoInterpretados: Record<string, unknown>[] = []
   const remocoes = bufs.has('RegistrosRemovidos.nx1') ? extrairRemocoes(bufs.get('RegistrosRemovidos.nx1')!) : []
@@ -753,9 +866,7 @@ export function normalizarNome(s: string): string {
   return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '')
 }
 
-export interface OpcoesImportacao {
-  simular?: boolean
-}
+export interface OpcoesImportacao {}
 
 // Extrai o dicionário de campos de um arquivo .nx1 (nomes e tipos de campo)
 function extrairDicionario(buf: Buffer): { nome: string; tipo: string }[] {
@@ -805,33 +916,43 @@ function contarBlocos(buf: Buffer): number {
 
 export async function importarNex(zipBuffer: Buffer, nomeZip: string, opcoes?: OpcoesImportacao): Promise<{ ok: boolean; resumo?: Record<string, number>; erros?: string[]; relatorio?: Record<string, unknown> }> {
   const erros: string[] = []
-  const simular = opcoes?.simular === true
+  const zip = new AdmZip(zipBuffer)
+  const entries = zip.getEntries().filter(e => !e.isDirectory && e.entryName.toLowerCase().endsWith('.nx1'))
+  const bufs = new Map<string, Buffer>()
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i]
+    try {
+      const data = entry.getData()
+      const nomeBase = entry.entryName.split(/[\\/]/).pop() as string
+      if (data) bufs.set(nomeBase, data)
+    } catch (e) {
+      erros.push(`Falha ao extrair ${entry.entryName}: ${(e as Error).message}`)
+    }
+  }
+  const r = await importarNexDeBufs(bufs, nomeZip, opcoes)
+  if (erros.length) r.erros = [...(r.erros || []), ...erros]
+  return r
+}
+
+// Importa direto de uma pasta com os arquivos .nx1 soltos (formato da pasta Dados do Nex)
+export async function importarNexDePasta(pasta: string, opcoes?: OpcoesImportacao): Promise<{ ok: boolean; resumo?: Record<string, number>; erros?: string[]; relatorio?: Record<string, unknown> }> {
+  const { readdirSync } = await import('node:fs')
+  const arquivos = readdirSync(pasta).filter((f) => f.toLowerCase().endsWith('.nx1'))
+  const bufs = new Map<string, Buffer>()
+  for (const f of arquivos) {
+    try {
+      bufs.set(f, readFileSync(join(pasta, f)))
+    } catch { /* ignora arquivo ilegível */ }
+  }
+  return importarNexDeBufs(bufs, pasta, opcoes)
+}
+
+async function importarNexDeBufs(bufs: Map<string, Buffer>, nomeZip: string, opcoes?: OpcoesImportacao): Promise<{ ok: boolean; resumo?: Record<string, number>; erros?: string[]; relatorio?: Record<string, unknown> }> {
+  const erros: string[] = []
   try {
     const db = getDb()
     db.exec('BEGIN')
-    if (simular) {
-      // em simulação: limpar tabelas importadas dentro da transação (será revertido)
-      atualizarProgresso({ ativo: true, etapa: 'simulacao', atual: 0, total: 1, mensagem: 'MODO SIMULAÇÃO — limpando banco temporariamente para medir importação real...' })
-      for (const t of ['pagamentos', 'venda_itens', 'vendas', 'movimentacoes', 'historico_remocoes', 'logs_sistema', 'terminais', 'caixas', 'usuarios', 'clientes', 'produtos', 'categorias', 'subcategorias', 'marcas', 'ncm_cadastro', 'cest_cadastro', 'cfop_cadastro']) {
-        try { db.exec(`DELETE FROM ${t}`) } catch { /* tabela pode não existir em versões antigas */ }
-      }
-    }
-    atualizarProgresso({ ativo: true, etapa: 'lendo', atual: 0, total: 1, mensagem: `Lendo ZIP ${nomeZip}...` })
-    const zip = new AdmZip(zipBuffer)
-    const entries = zip.getEntries().filter(e => !e.isDirectory && e.entryName.toLowerCase().endsWith('.nx1'))
-    atualizarProgresso({ ativo: true, etapa: 'extraindo', atual: 0, total: entries.length, mensagem: `Extraindo ${entries.length} arquivos .nx1...` })
-    const bufs = new Map<string, Buffer>()
-    for (let i = 0; i < entries.length; i++) {
-      const entry = entries[i]
-      try {
-        const data = entry.getData()
-        if (data) bufs.set(entry.entryName, data)
-      } catch (e) {
-        erros.push(`Falha ao extrair ${entry.entryName}: ${(e as Error).message}`)
-      }
-      atualizarProgresso({ atual: i + 1, mensagem: `Extraindo ${entry.entryName}...` })
-      if ((i + 1) % 20 === 0) await pausar()
-    }
+    atualizarProgresso({ ativo: true, etapa: 'lendo', atual: 0, total: 1, mensagem: `Lendo dados ${nomeZip}...` })
     const dados = montarImportacao(bufs)
     // Preservar estruturas do Nex sem suporte no sistema (zero perda de dados)
     atualizarProgresso({ ativo: true, etapa: 'dados_brutos', atual: 0, total: bufs.size, mensagem: 'Preservando dados brutos de estruturas sem suporte...' })
@@ -1176,57 +1297,87 @@ export async function importarNex(zipBuffer: Buffer, nomeZip: string, opcoes?: O
     let vendasSemItem = 0
     let itensImportados = 0
     let pagamentosImportados = 0
-    // mapa de itens por data e pagamentos por data (correlação por data validada na Fase 2)
-    const normData = (d: string): string => d ? d.slice(0, 19) : ''
-    const itensPorData = new Map<string, Record<string, unknown>[]>()
+    // correlação de itens -> venda por vínculo EXATO (item.tran == venda.id),
+    // em vez da antiga janela de tempo de 60s (que gerava vínculos faltantes/errados).
+    const itensDaVenda = new Map<number, Record<string, unknown>[]>()
     for (const it of dados.itens) {
-      const d = normData(String(it.data ?? ''))
-      if (!d) continue
-      if (!itensPorData.has(d)) itensPorData.set(d, [])
-      itensPorData.get(d)!.push(it)
+      const tran = Number(it.tran)
+      if (!(tran > 0)) continue
+      if (!itensDaVenda.has(tran)) itensDaVenda.set(tran, [])
+      itensDaVenda.get(tran)!.push(it)
     }
-    const pagPorData = new Map<string, Record<string, unknown>[]>()
+    // pagamentos: correlação por tempo (segundo mais próximo à data da venda)
+    const normData = (d: string): string => d ? String(d).slice(0, 19) : ''
+    const vendaIdPorIdx = new Map<number, number>()
+    dados.vendas.forEach((vv, idx) => vendaIdPorIdx.set(idx, Number((vv as Record<string, unknown>).id)))
+    const vendasTempo = dados.vendas
+      .map((vv, idx) => ({ idx, t: Date.parse(normData(String((vv as Record<string, unknown>).data ?? ''))) }))
+      .filter((x) => !isNaN(x.t))
+      .sort((a, b) => a.t - b.t)
+    const temposVenda = vendasTempo.map((x) => x.t)
+    const indicesVenda = vendasTempo.map((x) => x.idx)
+    const vendaMaisProxima = (t: number): number => {
+      let lo = 0, hi = temposVenda.length - 1
+      while (lo <= hi) { const mid = (lo + hi) >> 1; if (temposVenda[mid] < t) lo = mid + 1; else hi = mid - 1 }
+      let melhor = -1, melhorD = 60 * 1000
+      for (const cand of [hi, lo]) {
+        if (cand < 0 || cand >= temposVenda.length) continue
+        const d = Math.abs(temposVenda[cand] - t)
+        if (d < melhorD) { melhorD = d; melhor = indicesVenda[cand] }
+      }
+      return melhor
+    }
+    const pagsDaVenda = new Map<number, Record<string, unknown>[]>()
     for (const p of dados.pagamentos) {
-      const d = normData(String(p.data ?? ''))
-      if (!d) continue
-      if (!pagPorData.has(d)) pagPorData.set(d, [])
-      pagPorData.get(d)!.push(p)
+      const t = Date.parse(normData(String(p.data ?? '')))
+      const vi = isNaN(t) ? -1 : vendaMaisProxima(t)
+      if (vi < 0) continue
+      const vendaId = vendaIdPorIdx.get(vi)
+      if (vendaId === undefined) continue
+      if (!pagsDaVenda.has(vendaId)) pagsDaVenda.set(vendaId, [])
+      pagsDaVenda.get(vendaId)!.push(p)
     }
-    // idempotência: já importadas?
+    // idempotência: já importadas? (numero NEX-{id da venda})
     const vendasJaImportadas = new Set<number>()
     ;(db.prepare(`SELECT numero FROM vendas WHERE numero LIKE 'NEX-%'`).all() as { numero: string }[]).forEach(r => {
       const m = r.numero.match(/NEX-(\d+)/)
       if (m) vendasJaImportadas.add(Number(m[1]))
     })
-    let seqVenda = 1
     for (let i = 0; i < dados.vendas.length; i++) {
-      const v = dados.vendas[i] as Record<string, unknown>
+      const v = dados.vendas[i] as { id?: number; caixa?: number; data?: string | null; uid?: string }
       try {
         const dataIso = String(v.data ?? '')
         const data = dataIso.replace('T', ' ').replace('Z', '')
-        const operador = String(v.operador ?? '').toLowerCase()
-        const uId = operador ? (db.prepare(`SELECT id FROM usuarios WHERE login = ?`).get(operador) as { id: number } | undefined)?.id ?? null : null
-        const idNex = seqVenda++
+        const idNex = Number(v.id)
+        if (!(idNex > 0)) continue
         const numero = `NEX-${idNex}`
-        // em modo real, não duplicar vendas já importadas; em simulação, mostrar o total que seria importado
-        if (!simular && vendasJaImportadas.has(idNex)) continue
-        const itensVenda = itensPorData.get(normData(dataIso)) || []
-        const pagsVenda = pagPorData.get(normData(dataIso)) || []
+        if (vendasJaImportadas.has(idNex)) continue
+        const itensVenda = itensDaVenda.get(idNex) || []
+        const pagsVenda = pagsDaVenda.get(idNex) || []
         if (pagsVenda.length === 0) vendasSemPag++
         if (itensVenda.length === 0) vendasSemItem++
-        const totalPagCent = pagsVenda.filter(p => p.valorCentavos != null).reduce((s, p) => s + Number(p.valorCentavos), 0)
-        const total = totalPagCent > 0 ? totalPagCent / 100 : 0
+        // total/subtotal da venda = soma dos totais dos itens reais (fonte MovEst)
+        const somaItens = itensVenda.reduce((s, it) => s + (Number(it.total) || 0), 0)
+        const total = somaItens > 0 ? Math.round(somaItens * 100) / 100 : 0
+        const subtotal = total
         const vendaId = Number(db.prepare(`INSERT INTO vendas (numero, vendedor_id, cliente_id, tipo, subtotal, desconto, total, status, created_at, caixa_id, observacoes)
-          VALUES (?, ?, NULL, 'balcao', ?, 0, ?, 'concluida', ?, NULL, ?)`)
-          .run(numero, uId, total, total, data, `Importado do Nex. Data original: ${dataIso}`).lastInsertRowid)
+          VALUES (?, NULL, NULL, 'balcao', ?, 0, ?, 'concluida', ?, ?, ?)`)
+          .run(numero, subtotal, total, data || new Date().toISOString().replace('T', ' ').slice(0, 19), Number(v.caixa) > 0 ? Number(v.caixa) : null, `Importado do Nex. Data original: ${dataIso}`).lastInsertRowid)
         vendasCriadas++
-        // itens
+        // itens (com produto, quantidade e preço reais do MovEst)
         for (const it of itensVenda) {
-          const produtoNex = Number(it.produtoNex)
-          const prodId = db.prepare(`SELECT id FROM produtos WHERE codigo_interno = ? OR id = ?`).get(String(produtoNex), produtoNex) as { id: number } | undefined
+          const produtoNex = Number(it.produtoNex) || 0
+          const quant = Number(it.quant) || 0
+          const unit = Number(it.unit) || 0
+          const totIt = Number(it.total) || 0
+          const prodEncontrado = produtoNex > 0
+            ? db.prepare(`SELECT id, nome FROM produtos WHERE codigo_interno = ? OR id = ?`).get(String(produtoNex), produtoNex) as { id: number; nome: string } | undefined
+            : undefined
+          const prodId = prodEncontrado?.id ?? null
+          const nomeProduto = prodId != null && prodEncontrado?.nome ? prodEncontrado.nome : `produto#${produtoNex || 'desconhecido'}`
           db.prepare(`INSERT INTO venda_itens (venda_id, produto_id, nome_produto, quantidade, preco_unitario, subtotal)
-            VALUES (?, ?, ?, 1, 0, 0)`)
-            .run(vendaId, prodId?.id ?? null, `produto#${produtoNex}`)
+            VALUES (?, ?, ?, ?, ?, ?)`)
+            .run(vendaId, prodId, nomeProduto, quant, unit, totIt)
           itensImportados++
         }
         // pagamentos
@@ -1308,17 +1459,11 @@ export async function importarNex(zipBuffer: Buffer, nomeZip: string, opcoes?: O
        AND id NOT IN (SELECT COALESCE(categoria_id, 0) FROM produtos)
        AND id NOT IN (SELECT COALESCE(categoria_id, 0) FROM subcategorias)`
     ).run()
-    if (simular) {
-      db.exec('ROLLBACK')
-      atualizarProgresso({ ativo: false, etapa: 'simulado', atual: 1, total: 1, mensagem: `SIMULAÇÃO concluída — nada gravado. ${dados.categorias.length} categorias, ${nomesSubcategoriasDistintos} subcategorias, ${criados + nx1Criados} produtos (${criados} catálogo + ${nx1Criados} Produto.nx1)` })
-      registrarLog('INFO', `SIMULAÇÃO de importação Nex: ${dados.categorias.length} categorias, ${nomesSubcategoriasDistintos} subcategorias, ${criados + nx1Criados} produtos (${criados} catálogo + ${nx1Criados} Produto.nx1), ${clientesCriados} clientes, ${vendasCriadas} vendas (nada gravado)`)
-    } else {
-      db.exec('COMMIT')
-      atualizarProgresso({ ativo: false, etapa: 'concluido', atual: 1, total: 1, mensagem: `Concluído: ${criados} produtos, ${nx1Criados} Produto.nx1, ${clientesCriados} clientes, ${usuariosCriados} usuários, ${caixasCriados} caixas, ${vendasCriadas} vendas` })
-      registrarLog('SUCCESS', `Importação Nex concluída: ${criados} produtos catálogo, ${nx1Criados} Produto.nx1, ${clientesCriados} clientes, ${usuariosCriados} usuários, ${caixasCriados} caixas, ${vendasCriadas} vendas, ${itensImportados} itens, ${pagamentosImportados} pagamentos`)
-    }
+    db.exec('COMMIT')
+    atualizarProgresso({ ativo: false, etapa: 'concluido', atual: 1, total: 1, mensagem: `Concluído: ${criados} produtos catálogo, ${nx1Criados} Produto.nx1, ${clientesCriados} clientes, ${usuariosCriados} usuários, ${caixasCriados} caixas, ${vendasCriadas} vendas` })
+    registrarLog('SUCCESS', `Importação Nex concluída: ${criados} produtos de catálogo, ${nx1Criados} Produto.nx1, ${clientesCriados} clientes, ${usuariosCriados} usuários, ${caixasCriados} caixas, ${vendasCriadas} vendas, ${itensImportados} itens, ${pagamentosImportados} pagamentos`)
     const relatorio = {
-      modo: simular ? 'simulacao' : 'importacao',
+      modo: 'importacao',
       estrutura: {
         categorias: dados.categorias.length,
         categoriasCriadas: mapaCategorias.size,

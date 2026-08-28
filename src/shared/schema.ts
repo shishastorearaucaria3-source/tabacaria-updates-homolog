@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 40
+export const SCHEMA_VERSION = 41
 
 export const migrations: Record<number, string> = {
   1: `
@@ -805,5 +805,13 @@ export const migrations: Record<number, string> = {
 
     -- Sequência para números de pedido WhatsApp
     INSERT OR IGNORE INTO sequencias (chave, valor) VALUES ('pedido', 0);
+  `,
+  41: `
+    -- ============================================================
+    -- MIGRATION 41: PDV - dados de cliente, observação e entrega em vendas
+    -- ============================================================
+
+    ALTER TABLE vendas ADD COLUMN taxa_entrega REAL NOT NULL DEFAULT 0;
+    ALTER TABLE vendas ADD COLUMN cliente_endereco TEXT;
   `
 }

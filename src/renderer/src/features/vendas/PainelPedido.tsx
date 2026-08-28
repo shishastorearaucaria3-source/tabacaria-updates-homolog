@@ -140,7 +140,7 @@ export default function PainelPedido({
 
           <div className="pedido-painel-infos">
             <div className="linha"><span>Data:</span><span>{fmt(pedido.criado_em)}</span></div>
-            <div className="linha"><span>Cliente:</span><span>{pedido.cliente_nome || 'Consumidor não identificado'}</span></div>
+            <div className="linha"><span>Cliente:</span><span>{pedido.cliente_nome || '-'}</span></div>
             <div className="linha"><span>Contato:</span>
               <button className="pedido-painel-tel" onClick={() => copiarTelefone(pedido.cliente_telefone || '')} title="Clique para copiar (DDD + número)">
                 {pedido.cliente_telefone || '-'} {pedido.cliente_telefone ? '⧉' : ''}

@@ -9,7 +9,8 @@ interface DadosImportacao {
 }
 
 const CAMPOS: { campo: string; label: string; chaves: string[] }[] = [
-  { campo: 'nome', label: 'Nome', chaves: ['nome', 'descricao', 'produto', 'description'] },
+  { campo: 'nome', label: 'Nome', chaves: ['nome', 'produto'] },
+  { campo: 'observacoes', label: 'Observação', chaves: ['observação', 'observacao', 'obs', 'descricao', 'descrição', 'description'] },
   { campo: 'codigo_barras', label: 'Código / EAN / GTIN', chaves: ['ean', 'gtin', 'código', 'codigo', 'ean/gtin', 'código de barras', 'codigo de barras'] },
   { campo: 'codigo_extra', label: 'Código Extra', chaves: ['código extra', 'codigo extra'] },
   { campo: 'preco_venda', label: 'Preço', chaves: ['preço', 'preco', 'preço de venda', 'preco de venda', 'valor'] },
@@ -121,6 +122,7 @@ export default function ImportarProdutos({ onConcluido }: { onConcluido?: () => 
       qtd_min_atacado2: paraNumero(valorLinha(linha, 'qtd_min_atacado2')),
       ncm: norm(valorLinha(linha, 'ncm')) || null,
       cest: norm(valorLinha(linha, 'cest')) || null,
+      observacoes: norm(valorLinha(linha, 'observacoes')) || null,
       exportar_balanca: norm(valorLinha(linha, 'exportar_balanca')) === 'Sim' ? 1 : 0
     }
   }
@@ -184,12 +186,12 @@ export default function ImportarProdutos({ onConcluido }: { onConcluido?: () => 
             `UPDATE produtos SET nome=?, codigo_extra=?, preco_venda=?, estoque=?, estoque_minimo=?, estoque_maximo=?,
                categoria_id=?, marca_id=?, fornecedor_id=?, unidade=?, peso_liq=?, peso_bruto=?, localizacao=?,
                preco_promo=?, preco_atacado1=?, preco_atacado2=?, qtd_min_atacado1=?, qtd_min_atacado2=?,
-               ncm=?, cest=?, exportar_balanca=?
+               ncm=?, cest=?, observacoes=?, exportar_balanca=?
              WHERE id=?`,
             [p.nome, p.codigo_extra, p.preco_venda, p.estoque, p.estoque_minimo, p.estoque_maximo,
               categoriaId, marcaId, fornecedorId, p.unidade, p.peso_liq, p.peso_bruto, p.localizacao,
               p.preco_promo, p.preco_atacado1, p.preco_atacado2, p.qtd_min_atacado1, p.qtd_min_atacado2,
-              p.ncm, p.cest, p.exportar_balanca, existente.id]
+              p.ncm, p.cest, p.observacoes, p.exportar_balanca, existente.id]
           )
           atualizados++
         } else {
@@ -197,12 +199,12 @@ export default function ImportarProdutos({ onConcluido }: { onConcluido?: () => 
             `INSERT INTO produtos (nome, codigo_barras, codigo_extra, preco_venda, estoque, estoque_minimo, estoque_maximo,
                categoria_id, marca_id, fornecedor_id, unidade, peso_liq, peso_bruto, localizacao,
                preco_promo, preco_atacado1, preco_atacado2, qtd_min_atacado1, qtd_min_atacado2,
-               ncm, cest, exportar_balanca)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               ncm, cest, observacoes, exportar_balanca)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [p.nome, p.codigo_barras, p.codigo_extra, p.preco_venda, p.estoque, p.estoque_minimo, p.estoque_maximo,
               categoriaId, marcaId, fornecedorId, p.unidade, p.peso_liq, p.peso_bruto, p.localizacao,
               p.preco_promo, p.preco_atacado1, p.preco_atacado2, p.qtd_min_atacado1, p.qtd_min_atacado2,
-              p.ncm, p.cest, p.exportar_balanca]
+              p.ncm, p.cest, p.observacoes, p.exportar_balanca]
           )
           criados++
         }

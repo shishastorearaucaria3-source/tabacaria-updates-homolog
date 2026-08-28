@@ -227,6 +227,14 @@ authLogin: async (login: string, senha: string) => {
     post<{ ok: boolean }>('/api/auth/alterarSenha', { usuarioId, novaSenha }),
   authAtualizarUsuario: (dados: { usuarioId: number; nome: string; login: string; perfil: string; comissao: number; senha?: string }) =>
     post<{ ok: boolean }>('/api/auth/atualizarUsuario', dados),
+  authAtualizarOpcoes: (dados: { usuarioId: number; usar_web: boolean; usar_app: boolean; limitar_desconto: boolean; desconto_max_percent: number }) =>
+    post<{ ok: boolean }>('/api/auth/atualizarOpcoes', dados),
+  authAtualizarPermissoes: (dados: { usuarioId: number; modulos: string[] }) =>
+    post<{ ok: boolean }>('/api/auth/atualizarPermissoes', dados),
+  authAtivarDesativar: (dados: { usuarioId: number; ativo: boolean }) =>
+    post<{ ok: boolean }>('/api/auth/ativarDesativar', dados),
+  authDeletar: (dados: { usuarioId: number }) =>
+    post<{ ok: boolean }>('/api/auth/deletar', dados),
   imagemGet: (produtoId: number) => fetch(`${getServidorUrl()}/api/imagem/${produtoId}`, { headers: headersComSessao() }).then((r) => r.json() as Promise<string | null>),
   imagemList: () => fetch(`${getServidorUrl()}/api/imagem/list`, { headers: headersComSessao() }).then((r) => r.json() as Promise<Record<number, string>>),
   imagemListPorIds: (ids: number[]) => post<Record<number, string>>('/api/imagem/listPorIds', { ids }),

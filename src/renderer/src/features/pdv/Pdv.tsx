@@ -3,6 +3,7 @@ import { getDbApi, getImagemApi, getVendasCancelApi } from '../../shared/db'
 import CampoDinheiro, { parseMoeda, formatarMoeda } from '../../shared/CampoDinheiro'
 import Cupom from '../../shared/Cupom'
 import ConfigPdv from './ConfigPdv'
+import Clientes, { type Cliente } from '../clientes/Clientes'
 
 interface Produto {
   id: number
@@ -17,6 +18,7 @@ interface Produto {
   qtd_min_atacado2: number | null
   estoque: number
   estoque_minimo: number
+  controla_estoque: number
 }
 
 interface ItemCarrinho {
@@ -87,7 +89,7 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
   const [produtoEditando, setProdutoEditando] = useState<Produto | null>(null)
   const [itemEditandoIdx, setItemEditandoIdx] = useState<number | null>(null)
   const [itemEditando, setItemEditando] = useState<ItemCarrinho | null>(null)
-  const [produtoSemEstoque, setProdutoSemEstoque] = useState<Produto | null>(null)
+  const [produtoSemEstoque, setProdutoSemEstoque] = useState<{ produto: Produto; qtd: number } | null>(null)
   const [permitirSemEstoque, setPermitirSemEstoque] = useState<boolean>(() => localStorage.getItem('pdv_permitir_sem_estoque') === '1')
   const [buscaAvancada, setBuscaAvancada] = useState<boolean>(() => localStorage.getItem('pdv_busca_avancada') === '1')
   const [edicaoPedido, setEdicaoPedido] = useState<{ id: number; numero: string; cliente_nome: string; cliente_telefone: string | null; cliente_endereco: string | null; observacoes: string | null } | null>(null)
@@ -96,6 +98,23 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
   const [descontoEntrada, setDescontoEntrada] = useState('')
   const [modalDesconto, setModalDesconto] = useState(false)
   const [modalConfig, setModalConfig] = useState(false)
+  const [modoQuantidade, setModoQuantidade] = useState<'opcional' | 'produto' | 'quantidade'>(() => (localStorage.getItem('pdv_modo_quantidade') as 'opcional' | 'produto' | 'quantidade') || 'opcional')
+  const [casasDecimais, setCasasDecimais] = useState<number>(() => {
+    const v = localStorage.getItem('pdv_casas_decimais')
+    return v === null || v === '' ? 0 : Number(v)
+  })
+  const [qtdPreSelecao, setQtdPreSelecao] = useState<number>(() => {
+    const v = localStorage.getItem('pdv_qtd_busca')
+    return v === null || v === '' ? 1 : Number(v) || 1
+  })
+  const [produtoQtd, setProdutoQtd] = useState<{ produto: Produto; quantidade: number } | null>(null)
+  const [clienteSel, setClienteSel] = useState<Cliente | null>(null)
+  const [modalClientes, setModalClientes] = useState(false)
+  const [observacaoVenda, setObservacaoVenda] = useState('')
+  const [modalObs, setModalObs] = useState(false)
+  const [taxaEntregaStr, setTaxaEntregaStr] = useState('')
+  const [enderecoEntrega, setEnderecoEntrega] = useState('')
+  const [modalEntrega, setModalEntrega] = useState(false)
   const [imprimirVenda, setImprimirVenda] = useState(false)
   const [vendedores, setVendedores] = useState<{ id: number; nome: string }[]>([])
   const [modalVendedor, setModalVendedor] = useState(false)
@@ -104,6 +123,8 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
   const vendedorRef = useRef<HTMLButtonElement>(null)
   const [posVendaCupom, setPosVendaCupom] = useState<{ numero: string; total: number; itens: ItemCarrinho[]; pagamentos: FormaPagamento[] } | null>(null)
   const descontoRef = useRef<HTMLInputElement>(null)
+  const obsRef = useRef<HTMLTextAreaElement>(null)
+  const entregaEndRef = useRef<HTMLInputElement>(null)
   const cardSelRef = useRef<HTMLDivElement | null>(null)
   const sugestaoSelRef = useRef<HTMLButtonElement | null>(null)
   const uidRef = useRef(1)
@@ -187,7 +208,7 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
     )
   }
 
-  const alternarPlanoF5 = () => {
+  const alternarPrecoF1 = () => {
     const ordem: ('varejo' | 'atacado1' | 'atacado2')[] = ['varejo', 'atacado1', 'atacado2']
     const idx = ordem.indexOf(planoPreco)
     mudarPlanoPreco(ordem[(idx + 1) % ordem.length])
@@ -297,7 +318,7 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
       const rows = (await db.all(
         `SELECT p.id, p.nome, m.nome AS marca, p.codigo_barras, p.preco_venda,
                 p.preco_atacado1, p.preco_atacado2, p.qtd_min_atacado1, p.qtd_min_atacado2,
-                p.estoque, p.estoque_minimo
+                p.estoque, p.estoque_minimo, p.controla_estoque
          FROM produtos p
          LEFT JOIN marcas m ON m.id = p.marca_id
          WHERE p.ativo = 1
@@ -345,7 +366,7 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
     const rows = (await db.all(
       `SELECT p.id, p.nome, m.nome AS marca, p.codigo_barras, p.preco_venda,
               p.preco_atacado1, p.preco_atacado2, p.qtd_min_atacado1, p.qtd_min_atacado2,
-              p.estoque, p.estoque_minimo
+              p.estoque, p.estoque_minimo, p.controla_estoque
        FROM produtos p
        LEFT JOIN marcas m ON m.id = p.marca_id
        LEFT JOIN subcategorias s ON s.id = p.subcategoria_id
@@ -378,18 +399,56 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
   }, [busca, buscaAvancada])
 
   useEffect(() => {
-    if (!usuarioId) return
-    getDbApi()
-      .all(`SELECT modulo FROM permissoes WHERE usuario_id = ?`, [usuarioId])
+    const db = getDbApi()
+    const carregar = async () => {
+      let permitido = false
+      if (usuarioId) {
+        const rows = (await db.all(`SELECT modulo FROM permissoes WHERE usuario_id = ?`, [usuarioId])) as unknown as { modulo: string }[]
+        if (rows.some((r) => r.modulo === 'vender_sem_estoque')) permitido = true
+      }
+      const cfg = (await db.get(`SELECT valor FROM config WHERE chave = 'pdv_permitir_sem_estoque'`)) as { valor: string } | undefined
+      if (cfg?.valor === '1') permitido = true
+      setPermitirSemEstoque(permitido)
+      try { localStorage.setItem('pdv_permitir_sem_estoque', permitido ? '1' : '0') } catch { /* ignore */ }
+    }
+    carregar().catch(() => {})
+  }, [usuarioId])
+
+  useEffect(() => {
+    const db = getDbApi()
+    db.all(`SELECT chave, valor FROM config WHERE chave IN ('pdv_modo_quantidade', 'pdv_casas_decimais')`)
       .then((rows) => {
-        const mods = (rows as unknown as { modulo: string }[]).map((r) => r.modulo)
-        if (mods.includes('vender_sem_estoque')) {
-          setPermitirSemEstoque(true)
-          try { localStorage.setItem('pdv_permitir_sem_estoque', '1') } catch { /* ignore */ }
+        const mapa: Record<string, string> = {}
+        for (const r of rows as unknown as { chave: string; valor: string }[]) mapa[r.chave] = r.valor
+        if (mapa['pdv_modo_quantidade']) {
+          const m = mapa['pdv_modo_quantidade']
+          if (m === 'opcional' || m === 'produto' || m === 'quantidade') {
+            setModoQuantidade(m)
+            try { localStorage.setItem('pdv_modo_quantidade', m) } catch { /* ignore */ }
+          }
+        }
+        if (mapa['pdv_casas_decimais'] != null) {
+          const c = Number(mapa['pdv_casas_decimais'])
+          if (c === 0 || c === 2) {
+            setCasasDecimais(c)
+            try { localStorage.setItem('pdv_casas_decimais', String(c)) } catch { /* ignore */ }
+          }
         }
       })
       .catch(() => {})
-  }, [usuarioId])
+  }, [])
+
+  const stepQtd = casasDecimais === 2 ? 0.01 : 1
+
+  const parseQtd = (v: string): number => {
+    const num = Number(String(v).replace(',', '.'))
+    if (!Number.isFinite(num) || num < 0) return 0
+    return casasDecimais === 2 ? Math.round(num * 100) / 100 : Math.round(num)
+  }
+
+  const formatarQtd = (v: number): string => {
+    return casasDecimais === 2 ? v.toFixed(2) : String(Math.round(v))
+  }
 
   useEffect(() => {
     const t = setTimeout(() => carregarProdutos(), 250)
@@ -462,28 +521,52 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
         ? Math.min(subtotalLiquido, subtotalLiquido * ((Number(descontoEntrada) || 0) / 100))
         : 0
       : Math.min(subtotalLiquido, Number(descontoEntrada) || 0)
-  const totalVenda = Math.max(0, subtotalLiquido - descontoValor)
+  const taxaEntrega = Math.max(0, parseMoeda(taxaEntregaStr))
+  const totalVenda = Math.max(0, subtotalLiquido - descontoValor + taxaEntrega)
   const totalPago = pagamentos.reduce((s, p) => s + p.valor, 0)
   const valorEmDigitacao = Object.values(valoresFormas).reduce((s, v) => s + (Number(v?.replace(/\./g, '').replace(',', '.')) || 0), 0)
   const falta = totalVenda - totalPago
   const faltaComDigitacao = totalVenda - totalPago - valorEmDigitacao
   const troco = Math.max(-faltaComDigitacao, 0)
 
-  const adicionarAoCarrinho = useCallback((p: Produto) => {
+  const forcarAdicionar = (p: Produto, quantidade = 1) => {
+    const qtd = quantidade > 0 ? quantidade : 1
     setCarrinho((prev) => {
       if (agruparIguais()) {
         const existente = prev.find((i) => i.produto_id === p.id)
         if (existente) {
           return prev.map((i) =>
-            i.produto_id === p.id ? { ...i, quantidade: i.quantidade + 1 } : i
+            i.produto_id === p.id ? { ...i, quantidade: i.quantidade + qtd } : i
           )
         }
       }
       const uid = uidRef.current++
-      return [...prev, { uid, produto_id: p.id, nome: p.nome, quantidade: 1, preco_unitario: precoDe(p) }]
+      return [...prev, { uid, produto_id: p.id, nome: p.nome, quantidade: qtd, preco_unitario: precoDe(p) }]
     })
     setMensagem('')
+  }
+
+  const adicionarAoCarrinho = useCallback((p: Produto, quantidade = 1) => {
+    const qtd = quantidade > 0 ? quantidade : 1
+    if (p.controla_estoque === 1 && p.estoque < qtd) {
+      setProdutoSemEstoque({ produto: p, qtd })
+      return
+    }
+    forcarAdicionar(p, qtd)
   }, [planoPreco, produtos])
+
+  const adicionarProduto = (p: Produto) => {
+    if (modoQuantidade === 'produto') {
+      setProdutoQtd({ produto: p, quantidade: qtdPreSelecao > 0 ? qtdPreSelecao : 1 })
+      return
+    }
+    const qtd = modoQuantidade === 'quantidade' && qtdPreSelecao > 0 ? qtdPreSelecao : 1
+    adicionarAoCarrinho(p, qtd)
+    if (modoQuantidade === 'quantidade') {
+      setQtdPreSelecao(1)
+      try { localStorage.setItem('pdv_qtd_busca', '1') } catch { /* ignore */ }
+    }
+  }
 
   const mudarQuantidade = (uid: number, delta: number) => {
     setCarrinho((prev) =>
@@ -606,6 +689,16 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
     return lista
   }
 
+  const selecionarClienteDaVenda = (c: Cliente) => {
+    setClienteSel(c)
+    if (modo === 'pedido' || modo === 'orcamento') {
+      setClientePedido(c.nome)
+    }
+    setEnderecoEntrega((prev) => prev || (c.endereco || ''))
+    setModalClientes(false)
+    setTimeout(() => buscaRef.current?.focus(), 0)
+  }
+
   const limparVenda = () => {
     setCarrinho([])
     setPagamentos([])
@@ -616,6 +709,10 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
     setEdicaoPedido(null)
     setClientePedido('')
     setDescontoEntrada('')
+    setClienteSel(null)
+    setObservacaoVenda('')
+    setTaxaEntregaStr('')
+    setEnderecoEntrega('')
   }
 
   const finalizarComoPedido = async () => {
@@ -684,8 +781,8 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
       if (edicaoPedido) {
         const pedidoId = edicaoPedido.id
         await db.run(
-          `UPDATE pedidos SET subtotal = ?, desconto = ?, total = ? WHERE id = ?`,
-          [subtotal, descontoValor, totalVenda, pedidoId]
+          `UPDATE pedidos SET subtotal = ?, desconto = ?, total = ?, taxa_entrega = ?, cliente_telefone = ?, cliente_endereco = ?, observacoes = ? WHERE id = ?`,
+          [subtotal, descontoValor, totalVenda, taxaEntrega, clienteSel?.telefone ?? null, enderecoEntrega || null, observacaoVenda || null, pedidoId]
         )
         await db.run(`DELETE FROM pedido_itens WHERE pedido_id = ?`, [pedidoId])
         for (const item of carrinho) {
@@ -709,8 +806,8 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
         const agora = new Date().toISOString().slice(0, 19).replace('T', ' ')
         const res = await db.run(
           `INSERT INTO pedidos (numero, cliente_nome, cliente_telefone, cliente_endereco, observacoes, subtotal, desconto, taxa_entrega, total, status, vendedor_id, criado_em)
-           VALUES (?, ?, NULL, NULL, NULL, ?, ?, 0, ?, 'aceito', ?, ?)`,
-          [numero, clientePedido, subtotal, descontoValor, totalVenda, usuarioId ?? null, agora]
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'aceito', ?, ?)`,
+          [numero, clientePedido, clienteSel?.telefone ?? null, enderecoEntrega || null, observacaoVenda || null, subtotal, descontoValor, taxaEntrega, totalVenda, usuarioId ?? null, agora]
         )
         const pedidoId = Number(res.lastInsertRowid)
         for (const item of carrinho) {
@@ -733,8 +830,8 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
         const agora = new Date().toISOString().slice(0, 19).replace('T', ' ')
         const res = await db.run(
           `INSERT INTO orcamentos (numero, cliente_nome, cliente_telefone, cliente_endereco, observacoes, subtotal, desconto, taxa_entrega, total, status, vendedor_id, criado_em)
-           VALUES (?, ?, NULL, NULL, NULL, ?, ?, 0, ?, 'orcamento', ?, ?)`,
-          [numero, clientePedido, subtotal, descontoValor, totalVenda, usuarioId ?? null, agora]
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'orcamento', ?, ?)`,
+          [numero, clientePedido, clienteSel?.telefone ?? null, enderecoEntrega || null, observacaoVenda || null, subtotal, descontoValor, taxaEntrega, totalVenda, usuarioId ?? null, agora]
         )
         const orcId = Number(res.lastInsertRowid)
         for (const item of carrinho) {
@@ -767,7 +864,11 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
         total: totalVenda,
         vendedor_id: vendedorSelecionado?.id ?? null,
         caixa_id: caixaAberto?.id ?? null,
-        usuario_id: usuarioId ?? null
+        usuario_id: usuarioId ?? null,
+        cliente_id: clienteSel?.id ?? null,
+        observacoes: observacaoVenda || null,
+        taxa_entrega: taxaEntrega,
+        cliente_endereco: enderecoEntrega || null
       })
       if (!res.ok) {
         setMensagem(res.erro ?? 'Erro ao finalizar a venda.')
@@ -799,7 +900,7 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
 
   const usarCodigoBarras = (codigo: string) => {
     const p = produtos.find((x) => x.codigo_barras === codigo)
-    if (p) adicionarAoCarrinho(p)
+    if (p) adicionarProduto(p)
   }
 
   const confirmarVendedor = () => {
@@ -888,10 +989,24 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
         setModalDesconto(true)
         setTimeout(() => descontoRef.current?.focus(), 30)
       }
+      if (e.key === 'F1') {
+        e.preventDefault()
+        alternarPrecoF1()
+        setMensagem(`Preço: ${planoPreco === 'varejo' ? 'Atacado 1' : planoPreco === 'atacado1' ? 'Atacado 2' : 'Varejo'}`)
+      }
+      if (e.key === 'F4') {
+        e.preventDefault()
+        setModalObs(true)
+        setTimeout(() => obsRef.current?.focus(), 30)
+      }
       if (e.key === 'F5') {
         e.preventDefault()
-        alternarPlanoF5()
-        setMensagem(`Preço: ${planoPreco === 'varejo' ? 'Atacado 1' : planoPreco === 'atacado1' ? 'Atacado 2' : 'Varejo'}`)
+        setModalClientes(true)
+      }
+      if (e.key === 'F9') {
+        e.preventDefault()
+        setModalEntrega(true)
+        setTimeout(() => { entregaEndRef.current?.focus() }, 30)
       }
       if (e.key === 'Escape') {
         if (posVenda) {
@@ -912,6 +1027,21 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
         }
         if (modalVendedor) {
           setModalVendedor(false)
+          setTimeout(() => buscaRef.current?.focus(), 0)
+          return
+        }
+        if (modalClientes) {
+          setModalClientes(false)
+          setTimeout(() => buscaRef.current?.focus(), 0)
+          return
+        }
+        if (modalObs) {
+          setModalObs(false)
+          setTimeout(() => buscaRef.current?.focus(), 0)
+          return
+        }
+        if (modalEntrega) {
+          setModalEntrega(false)
           setTimeout(() => buscaRef.current?.focus(), 0)
           return
         }
@@ -947,7 +1077,7 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [posVenda, modalPagamento, modalDesconto, modalVendedor, itemEditando, carrinho.length, falta, valorPagamento, pagamentoForma, busca, aoVoltar, planoPreco, edicaoPedido, descontoEntrada, vendedores, vendedorIdx])
+  }, [posVenda, modalPagamento, modalDesconto, modalVendedor, itemEditando, modalClientes, modalObs, modalEntrega, carrinho.length, falta, valorPagamento, pagamentoForma, busca, aoVoltar, planoPreco, edicaoPedido, descontoEntrada, vendedores, vendedorIdx])
 
   useEffect(() => {
     if (modalPagamento) {
@@ -967,11 +1097,38 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
     }
   }, [sugestaoIdx])
 
+  useEffect(() => {
+    if (modalVendedor && vendedorRef.current) {
+      vendedorRef.current.scrollIntoView({ block: 'nearest' })
+    }
+  }, [vendedorIdx, modalVendedor])
+
+  const temModalAberto =
+    modalPagamento || modalDesconto || modalVendedor || itemEditando || posVenda ||
+    modalNovaLista || produtoEditando || produtoSemEstoque || modalConfig || produtoQtd ||
+    modalClientes || modalObs || modalEntrega
+
+  useEffect(() => {
+    const restaurar = () => {
+      const ativo = document.activeElement
+      if (ativo !== document.body && ativo !== null) return
+      if (temModalAberto) return
+      if (buscaRef.current) buscaRef.current.focus()
+    }
+    const onWinFocus = () => setTimeout(restaurar, 60)
+    window.addEventListener('focus', onWinFocus)
+    const iv = window.setInterval(restaurar, 2000)
+    return () => {
+      window.removeEventListener('focus', onWinFocus)
+      window.clearInterval(iv)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [temModalAberto])
   const categoriasPdv = [...new Set(produtos.map((p) => p.categoria ?? 'Sem categoria'))]
   const sugestoes = busca.trim() ? produtos : []
 
   const selecionarSugestao = (p: Produto) => {
-    adicionarAoCarrinho(p)
+    adicionarProduto(p)
     setBusca('')
     setSugestaoIdx(-1)
     buscaRef.current?.focus()
@@ -982,7 +1139,7 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
     const rows = (await db.all(
       `SELECT p.id, p.nome, m.nome AS marca, p.codigo_barras, p.preco_venda,
               p.preco_atacado1, p.preco_atacado2, p.qtd_min_atacado1, p.qtd_min_atacado2,
-              p.estoque, p.estoque_minimo
+              p.estoque, p.estoque_minimo, p.controla_estoque
        FROM produtos p
        LEFT JOIN marcas m ON m.id = p.marca_id
        WHERE p.ativo = 1 AND (p.nome LIKE ? OR p.codigo_barras LIKE ? OR m.nome LIKE ?)
@@ -1029,7 +1186,8 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
 
   return (
     <div className="pdv">
-      <div className="pdv-topo">
+    <div className="pdv-topo">
+      <div className="pdv-topo-linha pdv-topo-busca">
         <div className="pdv-busca-wrap">
           <div className="busca-pdv-caixa">
             <input
@@ -1055,6 +1213,40 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
               title={buscaAvancada ? 'Busca avançada ativa — clique para desativar' : 'Ativar busca avançada (busca em mais campos)'}
             >
               Avançada {buscaAvancada ? 'ON' : 'OFF'}
+            </button>
+          </div>
+          <div className="pdv-quant-wrap" title="Quantidade a ser adicionada ao selecionar o produto">
+            <span className="pdv-quant-label">Quant</span>
+            <button
+              className="pdv-quant-btn"
+              onClick={() => {
+                const novo = Math.max(0, qtdPreSelecao - stepQtd)
+                setQtdPreSelecao(casasDecimais === 2 ? Math.round(novo * 100) / 100 : Math.round(novo))
+                try { localStorage.setItem('pdv_qtd_busca', formatarQtd(novo)) } catch { /* ignore */ }
+              }}
+            >
+              −
+            </button>
+            <input
+              className="pdv-quant-input"
+              inputMode="decimal"
+              value={formatarQtd(qtdPreSelecao)}
+              onChange={(e) => {
+                const n = parseQtd(e.target.value)
+                setQtdPreSelecao(n)
+                try { localStorage.setItem('pdv_qtd_busca', formatarQtd(n)) } catch { /* ignore */ }
+              }}
+              onKeyDown={(e) => e.stopPropagation()}
+            />
+            <button
+              className="pdv-quant-btn"
+              onClick={() => {
+                const novo = qtdPreSelecao + stepQtd
+                setQtdPreSelecao(casasDecimais === 2 ? Math.round(novo * 100) / 100 : Math.round(novo))
+                try { localStorage.setItem('pdv_qtd_busca', formatarQtd(novo)) } catch { /* ignore */ }
+              }}
+            >
+              +
             </button>
           </div>
           {sugestoes.length > 0 && (
@@ -1085,16 +1277,28 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
               ))}
             </div>
           )}
-        </div>
+          </div>
+        <button
+          className="btn-gear"
+          onClick={() => setModalConfig(true)}
+          title="Configurações do PDV"
+        >
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </button>
+      </div>
+      <div className="pdv-topo-linha pdv-topo-acoes">
         <div className="pdv-controles">
-          <div className="pdv-controle-grupo" title="Plano de preço da venda (F5 alterna)">
+          <div className="pdv-controle-grupo" title="Plano de preço da venda (F1 alterna)">
             <span>Preço:</span>
             <div className="segmented pdv-plano-topo">
               <button className={planoPreco === 'varejo' ? 'ativo' : ''} onClick={() => mudarPlanoPreco('varejo')}>Varejo</button>
               <button className={planoPreco === 'atacado1' ? 'ativo' : ''} onClick={() => mudarPlanoPreco('atacado1')}>Atacado 1</button>
               <button className={planoPreco === 'atacado2' ? 'ativo' : ''} onClick={() => mudarPlanoPreco('atacado2')}>Atacado 2</button>
             </div>
-            <span className="pdv-f5-hint">F5</span>
+            <span className="pdv-f5-hint">F1</span>
           </div>
           <button
             className={`pdv-vendedor-btn ${vendedorSelecionado ? 'tem' : ''}`}
@@ -1110,14 +1314,41 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
             <span className="pdv-vendedor-nome">{vendedorSelecionado?.nome ?? 'Vendedor'}</span>
             <span className="pdv-f6-hint">F6</span>
           </button>
+          <button
+            className={`pdv-cliente-btn ${clienteSel ? 'tem' : ''}`}
+            onClick={() => setModalClientes(true)}
+            title="Selecionar cliente (F5)"
+          >
+            <span className="pdv-cliente-icone">👥</span>
+            <span className="pdv-cliente-nome">{clienteSel ? clienteSel.nome : 'Cliente'}</span>
+            <span className="pdv-f5-hint">F5</span>
+          </button>
+          {clienteSel && (
+            <button className="pdv-cliente-limpar" title="Remover cliente da venda" onClick={() => { setClienteSel(null); setEnderecoEntrega((prev) => clienteSel ? '' : prev) }}>
+              ×
+            </button>
+          )}
+          <button
+            className={`pdv-entrega-btn ${taxaEntrega > 0 || enderecoEntrega ? 'tem' : ''}`}
+            onClick={() => setModalEntrega(true)}
+            title="Configurar entrega (F9)"
+          >
+            <span className="pdv-entrega-icone">🚚</span>
+            <span className="pdv-entrega-nome">{taxaEntrega > 0 ? `Entrega R$ ${formatarMoeda(taxaEntrega)}` : 'Entrega'}</span>
+            <span className="pdv-f9-hint">F9</span>
+          </button>
+          <button
+            className={`pdv-obs-btn ${observacaoVenda.trim() ? 'tem' : ''}`}
+            onClick={() => setModalObs(true)}
+            title="Observação da venda (F4)"
+          >
+            <span className="pdv-obs-icone">📝</span>
+            <span className="pdv-obs-nome">{observacaoVenda.trim() ? 'Obs' : 'Obs.'}</span>
+            <span className="pdv-f4-hint">F4</span>
+          </button>
         </div>
-        <button className="btn-gear" onClick={() => setModalConfig(true)} title="Configurações do PDV">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-          </svg>
-        </button>
-        <span className="pdv-f3">F2: Pagamento • F3: Desconto • F5: Preço • F6: Vendedor</span>
+        <span className="pdv-f3">F2: Pagamento • F3: Desconto • F1: Preço • F6: Vendedor</span>
+      </div>
       </div>
 
       <div className="pdv-corpo">
@@ -1209,7 +1440,7 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
                         ref={ehSelecionado ? cardSelRef : undefined}
                         className={`card-produto-wrap ${ehSelecionado ? 'selecionado' : ''}`}
                       >
-                        <div className={`card-produto ${p.estoque <= 0 ? 'sem-estoque' : ''}`} onClick={() => adicionarAoCarrinho(p)}>
+                        <div className={`card-produto ${p.estoque <= 0 ? 'sem-estoque' : ''}`} onClick={() => adicionarProduto(p)}>
                           {imagens[p.id] && <img className="card-imagem" src={`data:image/png;base64,${imagens[p.id]}`} alt="" />}
                           <span
                             className="card-nome"
@@ -1308,6 +1539,16 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
             {descontoValor > 0 && (
               <div className="linha desconto"><span>Desconto</span><strong className="texto-vermelho">- R$ {descontoValor.toFixed(2)}</strong></div>
             )}
+            <button className="linha pdv-entrega-resumo" onClick={() => setModalEntrega(true)}>
+              <span>Entrega</span>
+              <strong>{taxaEntrega > 0 ? `R$ ${taxaEntrega.toFixed(2)}` : '-'}</strong>
+            </button>
+            {observacaoVenda.trim() && (
+              <div className="linha pdv-resumo-obs">
+                <span>Obs.</span>
+                <strong>{observacaoVenda}</strong>
+              </div>
+            )}
             <div className="linha total"><strong>R$ {totalVenda.toFixed(2)}</strong></div>
           </div>
 
@@ -1399,6 +1640,66 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
                 </button>
               ))}
               {vendedores.length === 0 && <p className="sem-resultado">Nenhum vendedor ativo cadastrado.</p>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modalClientes && (
+        <div className="modal-overlay" onClick={() => setModalClientes(false)}>
+          <div className="modal modal-clientes-pdv" onClick={(e) => e.stopPropagation()}>
+            <Clientes onSelecionar={selecionarClienteDaVenda} onFechar={() => setModalClientes(false)} />
+          </div>
+        </div>
+      )}
+
+      {modalObs && (
+        <div className="modal-overlay" onClick={() => setModalObs(false)}>
+          <div className="modal modal-obs" onClick={(e) => e.stopPropagation()}>
+            <h3>Observação da venda</h3>
+            <p className="pgto-f2-ajuda" style={{ marginTop: -4 }}>Texto interno/observações desta venda.</p>
+            <textarea
+              ref={obsRef}
+              className="obs-textarea"
+              rows={4}
+              value={observacaoVenda}
+              onChange={(e) => setObservacaoVenda(e.target.value)}
+              placeholder="Ex.: troca de produto, observação do cliente, etc."
+            />
+            <div className="modal-acoes">
+              <button className="btn-primario" onClick={() => setModalObs(false)}>Salvar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modalEntrega && (
+        <div className="modal-overlay" onClick={() => setModalEntrega(false)}>
+          <div className="modal modal-entrega" onClick={(e) => e.stopPropagation()}>
+            <h3>Entrega</h3>
+            {modo === 'venda' && (
+              <p className="pgto-f2-ajuda" style={{ marginTop: -4 }}>A entrega com taxa e endereço é registrada junto à venda.Atente para o valor no total.</p>
+            )}
+            <div className="form-grid">
+              <label style={{ gridColumn: '1 / -1' }}>Taxa de entrega (R$)
+                <CampoDinheiro
+                  value={taxaEntregaStr}
+                  onChange={setTaxaEntregaStr}
+                  placeholder="0,00"
+                />
+              </label>
+              <label style={{ gridColumn: '1 / -1' }}>Endereço de entrega
+                <input
+                  ref={entregaEndRef}
+                  value={enderecoEntrega}
+                  onChange={(e) => setEnderecoEntrega(e.target.value)}
+                  placeholder="Rua, número, bairro, cidade"
+                />
+              </label>
+            </div>
+            <div className="modal-acoes">
+              <button className="btn-secundario" onClick={() => { setTaxaEntregaStr(''); setEnderecoEntrega('') }}>Limpar</button>
+              <button className="btn-primario" onClick={() => setModalEntrega(false)}>Salvar</button>
             </div>
           </div>
         </div>
@@ -1596,22 +1897,44 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
       {produtoSemEstoque && (
         <div className="modal-overlay" onClick={() => setProdutoSemEstoque(null)}>
           <div className="modal modal-pagamento" onClick={(e) => e.stopPropagation()}>
-            <h3>Produto sem estoque</h3>
-            <p className="sem-resultado">O produto <strong>{produtoSemEstoque.nome}</strong> está sem estoque (disponível: {produtoSemEstoque.estoque}).</p>
+            <h3>{produtoSemEstoque.produto.estoque < produtoSemEstoque.qtd ? 'Estoque insuficiente' : 'Produto sem estoque'}</h3>
+            <p className="sem-resultado">
+              O produto <strong>{produtoSemEstoque.produto.nome}</strong> tem estoque disponível de {produtoSemEstoque.produto.estoque}, mas a quantidade informada é {produtoSemEstoque.qtd}.
+              {permitirSemEstoque
+                ? ' Confirma a venda mesmo assim?'
+                : ' A venda sem estoque está desativada. Para liberar, ative abaixo.'}
+            </p>
             <div className="modal-acoes">
               <button className="btn-secundario" onClick={() => setProdutoSemEstoque(null)}>Cancelar</button>
-              <button
-                className="btn-primario"
-                onClick={() => {
-                  setPermitirSemEstoque(true)
-                  try { localStorage.setItem('pdv_permitir_sem_estoque', '1') } catch { /* ignore */ }
-                  const p = produtoSemEstoque
-                  setProdutoSemEstoque(null)
-                  adicionarAoCarrinho(p)
-                }}
-              >
-                Permitir venda sem estoque
-              </button>
+              {permitirSemEstoque ? (
+                <button
+                  className="btn-primario"
+                  onClick={() => {
+                    const alvo = produtoSemEstoque
+                    setProdutoSemEstoque(null)
+                    forcarAdicionar(alvo.produto, alvo.qtd)
+                  }}
+                >
+                  Adicionar mesmo assim
+                </button>
+              ) : (
+                <button
+                  className="btn-primario"
+                  onClick={() => {
+                    getDbApi().run(
+                      `INSERT INTO config (chave, valor) VALUES ('pdv_permitir_sem_estoque', '1')
+                       ON CONFLICT(chave) DO UPDATE SET valor = '1'`
+                    ).catch(() => {})
+                    setPermitirSemEstoque(true)
+                    try { localStorage.setItem('pdv_permitir_sem_estoque', '1') } catch { /* ignore */ }
+                    const alvo = produtoSemEstoque
+                    setProdutoSemEstoque(null)
+                    forcarAdicionar(alvo.produto, alvo.qtd)
+                  }}
+                >
+                  Permitir venda sem estoque
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -1660,6 +1983,62 @@ export default function Pdv({ usuarioId, aoConcluirVenda, aoVoltar, pedidoEdicao
           pagamentos={posVendaCupom.pagamentos}
           onFechar={() => setPosVendaCupom(null)}
         />
+      )}
+
+      {produtoQtd && (
+        <div className="modal-overlay" onClick={() => setProdutoQtd(null)}>
+          <div className="modal modal-pagamento" onClick={(e) => e.stopPropagation()}>
+            <h3>Quantidade: {produtoQtd.produto.nome}</h3>
+            <div className="editar-item-qtd" style={{ justifyContent: 'center', margin: '14px 0' }}>
+              <button
+                onClick={() => {
+                  const novo = Math.max(0, produtoQtd.quantidade - stepQtd)
+                  setProdutoQtd({ ...produtoQtd, quantidade: casasDecimais === 2 ? Math.round(novo * 100) / 100 : Math.round(novo) })
+                }}
+              >
+                −
+              </button>
+              <input
+                autoFocus
+                className="pdv-quant-input"
+                inputMode="decimal"
+                style={{ width: 90, textAlign: 'center', fontSize: 18 }}
+                value={formatarQtd(produtoQtd.quantidade)}
+                onChange={(e) => setProdutoQtd({ ...produtoQtd, quantidade: parseQtd(e.target.value) })}
+                onKeyDown={(e) => {
+                  e.stopPropagation()
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    adicionarAoCarrinho(produtoQtd.produto, produtoQtd.quantidade)
+                    setProdutoQtd(null)
+                    buscaRef.current?.focus()
+                  }
+                }}
+              />
+              <button
+                onClick={() => {
+                  const novo = produtoQtd.quantidade + stepQtd
+                  setProdutoQtd({ ...produtoQtd, quantidade: casasDecimais === 2 ? Math.round(novo * 100) / 100 : Math.round(novo) })
+                }}
+              >
+                +
+              </button>
+            </div>
+            <div className="modal-acoes">
+              <button className="btn-secundario" onClick={() => setProdutoQtd(null)}>Cancelar</button>
+              <button
+                className="btn-primario"
+                onClick={() => {
+                  adicionarAoCarrinho(produtoQtd.produto, produtoQtd.quantidade)
+                  setProdutoQtd(null)
+                  buscaRef.current?.focus()
+                }}
+              >
+                Adicionar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {modalConfig && <ConfigPdv onFechar={() => setModalConfig(false)} />}

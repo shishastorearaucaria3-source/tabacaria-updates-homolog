@@ -76,6 +76,22 @@ export function registerDbHandlers(): void {
     return servidorClient.authAtualizarUsuario(dados)
   })
 
+  ipcMain.handle('auth:atualizarOpcoes', (_e, dados: { usuarioId: number; usar_web: boolean; usar_app: boolean; limitar_desconto: boolean; desconto_max_percent: number }) => {
+    return servidorClient.authAtualizarOpcoes(dados)
+  })
+
+  ipcMain.handle('auth:atualizarPermissoes', (_e, dados: { usuarioId: number; modulos: string[] }) => {
+    return servidorClient.authAtualizarPermissoes(dados)
+  })
+
+  ipcMain.handle('auth:ativarDesativar', (_e, dados: { usuarioId: number; ativo: boolean }) => {
+    return servidorClient.authAtivarDesativar(dados)
+  })
+
+  ipcMain.handle('auth:deletar', (_e, dados: { usuarioId: number }) => {
+    return servidorClient.authDeletar(dados)
+  })
+
   ipcMain.handle('imagem:definir', async (_e, produtoId: number) => {
     const win = BrowserWindow.getFocusedWindow()
     const res = await dialog.showOpenDialog(win ?? undefined!, {

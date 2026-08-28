@@ -1392,11 +1392,26 @@ body {
 
 .pdv-topo {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  gap: 10px;
   padding: 12px 16px;
   background: var(--bg2);
   border-bottom: 1px solid var(--borda);
+}
+
+.pdv-topo-linha {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.pdv-topo-busca {
+  flex: 1;
+}
+
+.pdv-topo-acoes {
+  flex-wrap: wrap;
 }
 
 .busca-pdv {
@@ -1687,6 +1702,36 @@ body {
   padding-top: 10px;
 }
 
+.pdv-entrega-resumo {
+  background: none;
+  border: none;
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+  font: inherit;
+  color: var(--texto);
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.pdv-entrega-resumo:hover {
+  background: var(--hover, rgba(0, 0, 0, 0.04));
+}
+
+.pdv-entrega-resumo strong {
+  font-size: 14px;
+}
+
+.pdv-resumo-obs strong {
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--texto2);
+  text-align: right;
+  white-space: normal;
+}
+
 .pdv-plano-preco {
   display: flex;
   align-items: center;
@@ -1774,6 +1819,90 @@ body {
   padding: 2px 6px;
   font-size: 11px;
   color: var(--texto2);
+}
+
+.pdv-cliente-btn,
+.pdv-entrega-btn,
+.pdv-obs-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--borda);
+  border-radius: 8px;
+  background: var(--bg);
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--texto);
+}
+
+.pdv-cliente-btn:hover,
+.pdv-entrega-btn:hover,
+.pdv-obs-btn:hover {
+  background: var(--bg3);
+  border-color: #3b82f6;
+}
+
+.pdv-cliente-btn.tem,
+.pdv-entrega-btn.tem,
+.pdv-obs-btn.tem {
+  border-color: #3b82f6;
+  background: #eff6ff;
+}
+
+.pdv-cliente-icone,
+.pdv-entrega-icone,
+.pdv-obs-icone {
+  font-size: 14px;
+}
+
+.pdv-cliente-nome,
+.pdv-entrega-nome,
+.pdv-obs-nome {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdv-cliente-limpar {
+  border: none;
+  background: transparent;
+  color: var(--texto2);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 4px;
+}
+
+.pdv-f4-hint,
+.pdv-f9-hint {
+  background: var(--bg3);
+  border: 1px solid var(--borda);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 11px;
+  color: var(--texto2);
+}
+
+.modal-clientes-pdv {
+  width: min(1100px, 94vw);
+  max-height: 90vh;
+  overflow: auto;
+  padding: 0;
+}
+
+.obs-textarea {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  border: 1px solid var(--borda);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--texto);
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  box-sizing: border-box;
 }
 
 .pdv-listas {
@@ -2130,6 +2259,10 @@ body {
 .pdv-busca-wrap {
   position: relative;
   flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 
 .pdv-busca-wrap .busca-pdv {
@@ -5697,6 +5830,58 @@ body {
   border-color: var(--primaria);
   color: #fff;
 }
+
+.pdv-quant-wrap {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  background: var(--bg3);
+  border: 1px solid var(--borda);
+  border-radius: 8px;
+}
+
+.pdv-quant-label {
+  color: var(--texto2);
+  font-size: 13px;
+  margin-right: 2px;
+}
+
+.pdv-quant-btn {
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--borda);
+  border-radius: 6px;
+  background: var(--bg2);
+  color: var(--texto);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pdv-quant-btn:hover {
+  border-color: var(--primaria);
+}
+
+.pdv-quant-input {
+  width: 56px;
+  text-align: center;
+  padding: 4px 6px;
+  font-size: 15px;
+  background: var(--bg3);
+  border: 1px solid var(--borda);
+  border-radius: 6px;
+  color: var(--texto);
+  outline: none;
+}
+
+.pdv-quant-input:focus {
+  border-color: var(--primaria);
+}
 .editar-item-qtd {
   display: flex;
   align-items: center;
@@ -5873,6 +6058,22 @@ body {
 .config-pdv-info span {
   font-size: 12px;
   color: var(--texto2);
+}
+
+.config-pdv-select {
+  flex: 0 0 auto;
+  max-width: 260px;
+  padding: 6px 8px;
+  font-size: 13px;
+  background: var(--bg3);
+  border: 1px solid var(--borda);
+  border-radius: 6px;
+  color: var(--texto);
+}
+
+.config-pdv-select:focus {
+  border-color: var(--primaria);
+  outline: none;
 }
 
 .switch {

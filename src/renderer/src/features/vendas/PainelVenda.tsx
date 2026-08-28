@@ -160,7 +160,7 @@ export default function PainelVenda({
 
           <div className="pedido-painel-infos">
             <div className="linha"><span>Data:</span><span>{fmt(venda.created_at)}</span></div>
-            <div className="linha"><span>Cliente:</span><span>{venda.cliente_nome || 'Consumidor não identificado'}</span></div>
+            <div className="linha"><span>Cliente:</span><span>{venda.cliente_nome || '-'}</span></div>
             {venda.cliente_telefone && (
               <div className="linha">
                 <span>Telefone:</span>

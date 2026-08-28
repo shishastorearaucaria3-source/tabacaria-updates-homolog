@@ -187,7 +187,8 @@ export async function importarProdutos(arquivo: string): Promise<{ ok: boolean; 
   }
   const colunas = Object.keys(linhas[0])
   const campos: { campo: string; chaves: string[] }[] = [
-    { campo: 'nome', chaves: ['nome', 'descricao', 'produto', 'description'] },
+    { campo: 'nome', chaves: ['nome', 'produto'] },
+    { campo: 'observacoes', chaves: ['observação', 'observacao', 'obs', 'descricao', 'descrição', 'description'] },
     { campo: 'codigo_barras', chaves: ['ean', 'gtin', 'código', 'codigo', 'codigo_barras', 'ean/gtin', 'código de barras', 'codigo de barras'] },
     { campo: 'codigo_extra', chaves: ['código extra', 'codigo extra'] },
     { campo: 'preco_venda', chaves: ['preço', 'preco', 'preço de venda', 'preco de venda', 'valor'] },
@@ -296,22 +297,23 @@ export async function importarProdutos(arquivo: string): Promise<{ ok: boolean; 
           paraNumero(val(linha, 'qtd_min_atacado1')),
           paraNumero(val(linha, 'qtd_min_atacado2')),
           norm(val(linha, 'ncm')) || null,
-          norm(val(linha, 'cest')) || null
+          norm(val(linha, 'cest')) || null,
+          norm(val(linha, 'observacoes')) || null
         ] as SQLInputValue[]
         if (existente) {
           db.prepare(
             `UPDATE produtos SET nome=?, codigo_barras=?, codigo_extra=?, preco_venda=?, estoque=?, estoque_minimo=?, estoque_maximo=?,
                categoria_id=?, marca_id=?, fornecedor_id=?, unidade=?, peso_liq=?, peso_bruto=?, localizacao=?,
                preco_promo=?, preco_atacado1=?, preco_atacado2=?, qtd_min_atacado1=?, qtd_min_atacado2=?,
-               ncm=?, cest=? WHERE id=?`
+               ncm=?, cest=?, observacoes=? WHERE id=?`
           ).run(...dados, existente.id)
           resultado.atualizados++
         } else {
           db.prepare(
             `INSERT INTO produtos (nome, codigo_barras, codigo_extra, preco_venda, estoque, estoque_minimo, estoque_maximo,
                categoria_id, marca_id, fornecedor_id, unidade, peso_liq, peso_bruto, localizacao,
-               preco_promo, preco_atacado1, preco_atacado2, qtd_min_atacado1, qtd_min_atacado2, ncm, cest)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+               preco_promo, preco_atacado1, preco_atacado2, qtd_min_atacado1, qtd_min_atacado2, ncm, cest, observacoes)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
           ).run(...dados)
           resultado.criados++
         }

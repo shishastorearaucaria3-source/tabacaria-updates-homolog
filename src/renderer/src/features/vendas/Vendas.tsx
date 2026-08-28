@@ -62,7 +62,7 @@ type Visualizacao = 'resumida' | 'produto'
 type Periodo = 'recentes' | 'hoje' | 'ontem' | 'semana' | 'mes' | 'ano' | 'caixa_atual'
 
 const COLUNAS_PEDIDO: { chave: string; label: string }[] = [
-  { chave: 'numero', label: 'Número da venda' },
+  { chave: 'numero', label: 'Número' },
   { chave: 'cliente', label: 'Cliente' },
   { chave: 'itens', label: 'Itens' },
   { chave: 'total', label: 'Total' },
@@ -524,7 +524,7 @@ export default function Vendas({ onNovaVenda, onEditarPedido, onNovoPedido, onNo
       case 'numero':
         return <span>#{p.numero.replace(/^C-/, '')}</span>
       case 'cliente':
-        return <span>{p.cliente_nome || 'Consumidor não identificado'}</span>
+        return <span>{p.cliente_nome || '-'}</span>
       case 'itens':
         return <span>{p.itens?.length ?? 0} itens</span>
       case 'total':
@@ -582,7 +582,7 @@ export default function Vendas({ onNovaVenda, onEditarPedido, onNovoPedido, onNo
       case 'numero':
         return <span>{vendaNumero(v)}</span>
       case 'cliente':
-        return <span>{v.cliente_nome || 'Consumidor não identificado'}</span>
+        return <span>{v.cliente_nome || '-'}</span>
       case 'itens':
         return <span>{itensV.length} itens</span>
       case 'total':
@@ -927,7 +927,7 @@ export default function Vendas({ onNovaVenda, onEditarPedido, onNovoPedido, onNo
                       {colunasPedidoAtivas.map((chave) => (
                         <td key={chave} className={chave === 'itens' && itens.length ? 'coluna-itens' : undefined}>
                           {chave === 'cliente' ? (
-                            <span>{p.cliente_nome || 'Consumidor não identificado'}</span>
+                            <span>{p.cliente_nome || '-'}</span>
                           ) : chave === 'itens' && itens.length > 0 ? (
                             <div className="pedido-itens-lista">
                               {itensVisiveis.map((it, i) => (
@@ -1007,7 +1007,7 @@ export default function Vendas({ onNovaVenda, onEditarPedido, onNovoPedido, onNo
               {orcamentos.map((o) => (
                 <tr key={o.id}>
                   <td>{o.numero}</td>
-                  <td>{o.cliente_nome || 'Consumidor não identificado'}</td>
+                  <td>{o.cliente_nome || '-'}</td>
                   <td>R$ {o.total.toFixed(2)}</td>
                   <td>{o.status}</td>
                   <td>{fmt(o.criado_em)}</td>

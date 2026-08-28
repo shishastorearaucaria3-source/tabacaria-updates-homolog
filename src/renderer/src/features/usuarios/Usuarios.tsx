@@ -162,6 +162,8 @@ export default function Usuarios() {
   const [acesso, setAcesso] = useState<Record<string, boolean>>({})
   const [abas, setAbas] = useState<Record<number, 'dados' | 'supervisor' | 'permissoes'>>({})
   const [expandidos, setExpandidos] = useState<Record<string, boolean>>({ caixa: true, clientes: true })
+  const [souAdmin, setSouAdmin] = useState(false)
+  const [souGerente, setSouGerente] = useState(false)
 
   const carregar = useCallback(async () => {
     const rows = (await getDbApi().all(
@@ -171,8 +173,21 @@ export default function Usuarios() {
   }, [])
 
   useEffect(() => {
+    getAuthApi().session().then((s) => {
+      setSouAdmin(s?.perfil === 'admin')
+      setSouGerente(s?.perfil === 'gerente')
+    }).catch(() => {})
     carregar()
   }, [carregar])
+
+  const podeGerenciarAdmin = souAdmin
+  // Gerente não pode operar sobre um usuário admin (não editar, não fornecer
+  // perfil admin, não alterar senha de admin etc.).
+  const usuarioEhAdmin = (u: { perfil: string }) => u?.perfil === 'admin'
+  const bloqueadoPorSerAdmin = (u: { perfil: string }) => !podeGerenciarAdmin && usuarioEhAdmin(u)
+  const opcoesPerfilVisiveis: { value: string; label: string }[] = souAdmin
+    ? [{ value: 'vendedor', label: 'Vendedor' }, { value: 'gerente', label: 'Gerente' }, { value: 'admin', label: 'Administrador' }]
+    : [{ value: 'vendedor', label: 'Vendedor' }, { value: 'gerente', label: 'Gerente' }]
 
   const salvar = async () => {
     if (!form.nome.trim() || !form.login.trim()) {
@@ -180,6 +195,14 @@ export default function Usuarios() {
       return
     }
     if (form.id) {
+      if (bloqueadoPorSerAdmin({ perfil: usuarios.find((u) => u.id === form.id)?.perfil ?? '' })) {
+        setMensagem('Somente o administrador pode editar outro usuário administrador.')
+        return
+      }
+      if (!souAdmin && form.perfil === 'admin') {
+        setMensagem('Somente o administrador pode conceder o perfil administrador.')
+        return
+      }
       const res = await getAuthApi().atualizarUsuario({
         usuarioId: form.id,
         nome: form.nome.trim(),
@@ -189,10 +212,13 @@ export default function Usuarios() {
         senha: form.senha || undefined
       })
       if (res.ok) {
-        await getDbApi().run(
-          `UPDATE usuarios SET usar_web = ?, usar_app = ?, limitar_desconto = ?, desconto_max_percent = ? WHERE id = ?`,
-          [form.usar_web ? 1 : 0, form.usar_app ? 1 : 0, form.limitar_desconto ? 1 : 0, Number(form.desconto_max) || 0, form.id]
-        )
+        await getAuthApi().atualizarOpcoes({
+          usuarioId: form.id,
+          usar_web: form.usar_web,
+          usar_app: form.usar_app,
+          limitar_desconto: form.limitar_desconto,
+          desconto_max_percent: Number(form.desconto_max) || 0
+        })
         setFormAberto(false)
         setForm({ ...usuarioVazio })
         setMensagem('Usuário atualizado.')
@@ -206,6 +232,10 @@ export default function Usuarios() {
       setMensagem('Informe uma senha inicial.')
       return
     }
+    if (!souAdmin && form.perfil === 'admin') {
+      setMensagem('Somente o administrador pode criar usuários com perfil administrador.')
+      return
+    }
     const res = await getAuthApi().criarUsuario({
       nome: form.nome.trim(),
       login: form.login.trim(),
@@ -214,10 +244,13 @@ export default function Usuarios() {
       comissao: Number(form.comissao) || 0
     })
     if (res.ok && res.id != null) {
-      await getDbApi().run(
-        `UPDATE usuarios SET usar_web = ?, usar_app = ?, limitar_desconto = ?, desconto_max_percent = ? WHERE id = ?`,
-        [form.usar_web ? 1 : 0, form.usar_app ? 1 : 0, form.limitar_desconto ? 1 : 0, Number(form.desconto_max) || 0, res.id]
-      )
+      await getAuthApi().atualizarOpcoes({
+        usuarioId: res.id,
+        usar_web: form.usar_web,
+        usar_app: form.usar_app,
+        limitar_desconto: form.limitar_desconto,
+        desconto_max_percent: Number(form.desconto_max) || 0
+      })
       setFormAberto(false)
       setForm({ ...usuarioVazio })
       setMensagem('Usuário criado.')
@@ -250,30 +283,54 @@ export default function Usuarios() {
       setMensagem('Não é possível deletar o administrador.')
       return
     }
-    if (!confirm(`Deletar o usuário ${u.nome}? Esta ação não pode ser desfeita.`)) return
-    await getDbApi().run(`DELETE FROM permissoes WHERE usuario_id = ?`, [u.id])
-    await getDbApi().run(`DELETE FROM usuarios WHERE id = ?`, [u.id])
-    setMensagem('Usuário deletado.')
-    carregar()
+    if (bloqueadoPorSerAdmin(u)) {
+      setMensagem('Somente o administrador pode deletar outro usuário administrador.')
+      return
+    }
+    if (confirm(`Deletar o usuário ${u.nome}? Esta ação não pode ser desfeita.`)) {
+      const res = await getAuthApi().deletar({ usuarioId: u.id })
+      if (res.ok) {
+        setMensagem('Usuário deletado.')
+        carregar()
+      } else {
+        setMensagem('Erro ao deletar usuário.')
+      }
+    }
   }
 
   const alterarSenha = async (u: LinhaUsuario) => {
+    if (bloqueadoPorSerAdmin(u)) {
+      setMensagem('Somente o administrador pode alterar a senha de um administrador.')
+      return
+    }
     const nova = prompt(`Nova senha para ${u.nome}:`)
     if (!nova || nova.length < 4) {
       setMensagem('Senha deve ter ao menos 4 caracteres.')
       return
     }
-    await getAuthApi().alterarSenha(u.id, nova)
-    setMensagem('Senha alterada.')
+    const res = await getAuthApi().alterarSenha(u.id, nova)
+    setMensagem(res.ok ? 'Senha alterada.' : 'Erro ao alterar senha.')
   }
 
   const ativarDesativar = async (u: LinhaUsuario) => {
-    await getDbApi().run(`UPDATE usuarios SET ativo = ? WHERE id = ?`, [u.ativo ? 0 : 1, u.id])
-    setMensagem(u.ativo ? 'Usuário desativado.' : 'Usuário ativado.')
-    carregar()
+    if (bloqueadoPorSerAdmin(u)) {
+      setMensagem('Somente o administrador pode desativar/ativar um administrador.')
+      return
+    }
+    const res = await getAuthApi().ativarDesativar({ usuarioId: u.id, ativo: !u.ativo })
+    if (res.ok) {
+      setMensagem(u.ativo ? 'Usuário desativado.' : 'Usuário ativado.')
+      carregar()
+    } else {
+      setMensagem('Erro ao alterar o status do usuário.')
+    }
   }
 
   const abrirPermissoes = async (u: LinhaUsuario) => {
+    if (bloqueadoPorSerAdmin(u)) {
+      setMensagem('Somente o administrador pode gerenciar as permissões de um administrador.')
+      return
+    }
     setPermUsuarioId(u.id)
     setPermUsuarioNome(u.nome)
     const rows = (await getDbApi().all(
@@ -298,27 +355,19 @@ export default function Usuarios() {
 
   const salvarPermissoes = async () => {
     if (!permUsuarioId) return
-    const db = getDbApi()
     const moduloAtual = usuarios.find((u) => u.id === permUsuarioId)
     if (moduloAtual?.perfil === 'admin') {
       setMensagem('Administrador já tem acesso a todas as permissões.')
       setPermUsuarioId(null)
       return
     }
-    await db.run(`DELETE FROM permissoes WHERE usuario_id = ?`, [permUsuarioId])
-    const todas = [...MODULOS_PERMISSOES.flatMap((m) => m.permissoes.map((p) => p.chave))]
-    for (const ch of todas) {
-      if (permissao[ch]) {
-        await db.run(`INSERT INTO permissoes (usuario_id, modulo) VALUES (?, ?)`, [permUsuarioId, ch])
-      }
-    }
-    for (const m of MODULOS_ACESSO) {
-      if (acesso[m.chave]) {
-        await db.run(`INSERT INTO permissoes (usuario_id, modulo) VALUES (?, ?)`, [permUsuarioId, m.chave])
-      }
-    }
+    const modulos = [
+      ...MODULOS_PERMISSOES.flatMap((m) => m.permissoes.map((p) => p.chave)).filter((ch) => permissao[ch]),
+      ...MODULOS_ACESSO.map((m) => m.chave).filter((ch) => acesso[ch])
+    ]
+    const res = await getAuthApi().atualizarPermissoes({ usuarioId: permUsuarioId, modulos })
     setPermUsuarioId(null)
-    setMensagem(`Permissões de ${permUsuarioNome} salvas.`)
+    setMensagem(res.ok ? `Permissões de ${permUsuarioNome} salvas.` : 'Erro ao salvar permissões.')
   }
 
   const alternarModulo = (m: ModuloPermissao, ativo: boolean) => {
@@ -345,10 +394,10 @@ export default function Usuarios() {
         <input type="password" value={form.senha} onChange={(e) => setForm({ ...form, senha: e.target.value })} />
       </label>
       <label>Perfil
-        <select value={form.perfil} onChange={(e) => setForm({ ...form, perfil: e.target.value })}>
-          <option value="vendedor">Vendedor</option>
-          <option value="gerente">Gerente</option>
-          <option value="admin">Administrador</option>
+        <select value={form.perfil} onChange={(e) => setForm({ ...form, perfil: e.target.value })} disabled={!souAdmin && !form.id && usuarios.some((u) => u.id === form.id && u.perfil === 'admin')}>
+          {opcoesPerfilVisiveis.map((op) => (
+            <option key={op.value} value={op.value}>{op.label}</option>
+          ))}
         </select>
       </label>
       <label style={{ gridColumn: '1 / -1' }}>Comissão (%) — aplicada nas vendas deste vendedor
@@ -377,10 +426,15 @@ export default function Usuarios() {
           <input type="number" step="0.01" min="0" max="100" value={form.desconto_max} onChange={(e) => setForm({ ...form, desconto_max: e.target.value })} />
         </label>
       )}
-      <label className="permissao-item">
-        <input type="checkbox" checked={form.perfil === 'admin'} onChange={(e) => setForm({ ...form, perfil: e.target.checked ? 'admin' : 'vendedor' })} />
-        Este usuário é um Administrador e tem acesso a todas as funções do Nex
-      </label>
+      {souAdmin && (
+        <label className="permissao-item">
+          <input type="checkbox" checked={form.perfil === 'admin'} onChange={(e) => setForm({ ...form, perfil: e.target.checked ? 'admin' : 'vendedor' })} />
+          Este usuário é um Administrador e tem acesso a todas as funções do Nex
+        </label>
+      )}
+      {!souAdmin && (form.id ? usuarios.find((u) => u.id === form.id)?.perfil === 'admin' : false) && (
+        <p className="nota-config">Este usuário é administrador. Somente o administrador principal pode alterar este perfil.</p>
+      )}
     </div>
   )
 
@@ -522,14 +576,14 @@ export default function Usuarios() {
               <td>{u.perfil === 'admin' ? 'Todas' : 'Conforme permissões'}</td>
               <td>{u.ativo ? 'Ativo' : 'Inativo'}</td>
               <td className="td-acoes">
-                <button className="btn-mini" onClick={() => editarUsuario(u)}>Editar</button>
-                <button className="btn-mini" onClick={() => abrirPermissoes(u)}>Permissões</button>
-                <button className="btn-mini" onClick={() => alterarSenha(u)}>Senha</button>
-                <button className="btn-mini" onClick={() => ativarDesativar(u)}>
+                <button className="btn-mini" onClick={() => editarUsuario(u)} disabled={bloqueadoPorSerAdmin(u)}>Editar</button>
+                <button className="btn-mini" onClick={() => abrirPermissoes(u)} disabled={bloqueadoPorSerAdmin(u)}>Permissões</button>
+                <button className="btn-mini" onClick={() => alterarSenha(u)} disabled={bloqueadoPorSerAdmin(u)}>Senha</button>
+                <button className="btn-mini" onClick={() => ativarDesativar(u)} disabled={bloqueadoPorSerAdmin(u)}>
                   {u.ativo ? 'Desativar' : 'Ativar'}
                 </button>
                 {u.perfil !== 'admin' && (
-                  <button className="btn-mini btn-danger" onClick={() => deletarUsuario(u)}>Deletar</button>
+                  <button className="btn-mini btn-danger" onClick={() => deletarUsuario(u)} disabled={bloqueadoPorSerAdmin(u)}>Deletar</button>
                 )}
               </td>
             </tr>

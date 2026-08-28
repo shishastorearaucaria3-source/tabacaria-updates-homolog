@@ -343,18 +343,113 @@ export function iniciarServidor(porta = 3210): void {
     res.status(401).json({ erro: 'Sessão inválida ou ausente. Faça login no terminal.' })
   })
 
-  // Rotas administrativas/destrutivas: SOMENTE execução local (no servidor).
-  // Terminais remotos nunca podem zerar dados, restaurar backup ou gerenciar usuários.
+  // Rotas administrativas: exigem sessão válida com perfil 'admin', em QUALQUER
+  // computador (servidor ou cliente da LAN). A autorização não depende mais de
+  // loopback vs rede — é a mesma em todos os terminais.
   const somenteLocal = (req: express.Request, res: express.Response, next: express.NextFunction): void => {
     if (ehLocalEfetivo(req)) { next(); return }
     res.status(403).json({ erro: 'Esta operação só pode ser executada no computador do servidor.' })
   }
 
+  // ---------------------------------------------------------------------------
+  // Autorização por SESSÃO — fonte única de identidade do usuário autenticado.
+  // Regra central: o que vale é sessão válida + perfil do usuário, nunca a
+  // localidade (loopback vs rede). Assim o servidor e os clientes da LAN se
+  // comportam de forma consistente.
+  // ---------------------------------------------------------------------------
+  function sessaoAtualDoReq(req: express.Request):
+    | { usuario_id: number; login: string; perfil: string; criado_em: number }
+    | undefined {
+    limparSessoesExpiradas()
+    const token = String(req.get('x-sessao-token') || '')
+    return token ? sessoes.get(token) : undefined
+  }
+
+  // Exige sessão válida com perfil 'admin'. NÃO abre exceção por localidade —
+  // a regra é idêntica em qualquer computador. Sem sessão → 401; sessão sem
+  // perfil admin → 403.
+  const requerAdmin = (req: express.Request, res: express.Response, next: express.NextFunction): void => {
+    const sessao = sessaoAtualDoReq(req)
+    if (sessao && sessao.perfil === 'admin') { next(); return }
+    if (!sessao) {
+      res.status(401).json({ erro: 'Sessão inválida ou ausente. Faça login no terminal.' })
+      return
+    }
+    res.status(403).json({ erro: 'Acesso restrito ao perfil administrador.' })
+  }
+
+  // Autorização para gerenciamento de usuários: permite o perfil 'admin' ou
+  // 'gerente'. As restrições anti-escala (não tocar em admin, não elevar a admin)
+  // são aplicadas dentro de cada rota, já que gerente NÃO pode criar/promover
+  // administradores.
+  const requerAdminOuGerente = (req: express.Request, res: express.Response, next: express.NextFunction): void => {
+    const sessao = sessaoAtualDoReq(req)
+    if (sessao && (sessao.perfil === 'admin' || sessao.perfil === 'gerente')) { next(); return }
+    if (!sessao) {
+      res.status(401).json({ erro: 'Sessão inválida ou ausente. Faça login no terminal.' })
+      return
+    }
+    res.status(403).json({ erro: 'Acesso restrito ao perfil administrador ou gerente.' })
+  }
+
+  // Dados completos do usuário autenticado na sessão (para ler campos de
+  // autorização como perfil, limitar_desconto, desconto_max_percent e permissões).
+  function usuarioAutenticadoDoReq(req: express.Request):
+    | { id: number; nome: string; login: string; perfil: string; limitar_desconto: number; desconto_max_percent: number }
+    | undefined {
+    const sessao = sessaoAtualDoReq(req)
+    if (!sessao) return undefined
+    return database
+      .prepare(`SELECT id, nome, login, perfil, limitar_desconto, desconto_max_percent FROM usuarios WHERE id = ? AND ativo = 1`)
+      .get(sessao.usuario_id) as
+      | { id: number; nome: string; login: string; perfil: string; limitar_desconto: number; desconto_max_percent: number }
+      | undefined
+  }
+
+  function usuarioTemPermissao(usuarioId: number, modulo: string): boolean {
+    return !!database.prepare(`SELECT 1 AS ok FROM permissoes WHERE usuario_id = ? AND modulo = ?`).get(usuarioId, modulo)
+  }
+
+  // Invalida todas as sessões de um usuário (senha trocada, perfil rebaixado,
+  // usuário desativado ou deletado). Evita token órfão válido por 12h.
+  function invalidarSessoesDoUsuario(usuarioId: number): void {
+    for (const [t, s] of sessoes) {
+      if (s.usuario_id === usuarioId) sessoes.delete(t)
+    }
+  }
+
+  // Detecta operação de ESCRITA (INSERT/UPDATE/DELETE/REPLACE) sobre tabelas
+  // sensíveis de autorização. Usado para impedir o contorno de autorização via
+  // rotas genéricas de banco (/api/db/run e /api/db/transacao).
+  const TABELAS_SENSIVEIS = new Set(['usuarios', 'permissoes'])
+  function tabelaEscrita(sqlRaw: unknown): string | null {
+    if (typeof sqlRaw !== 'string') return null
+    const sql = sqlRaw.trim().replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--.*$/gm, ' ')
+    const m = sql.match(/^\s*(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM)\s+([A-Za-z_][A-Za-z0-9_]*)/i)
+    return m ? m[1].toLowerCase() : null
+  }
+  function ehEscritaSensivel(sql: unknown): boolean {
+    const t = tabelaEscrita(sql)
+    return !!t && TABELAS_SENSIVEIS.has(t)
+  }
   app.post('/api/db/all', (req, res) => {
     const { sql, params } = req.body ?? {}
     if (typeof sql !== 'string') {
       res.status(400).json({ erro: 'sql obrigatório' })
       return
+    }
+    // Endpoint de LEITURA: escrita aqui (INSERT/UPDATE/DELETE/REPLACE, inclusive
+    // via RETURNING) contornaria a autorização por sessão/perfil. Só admin pode.
+    if (tabelaEscrita(sql)) {
+      const sessao = sessaoAtualDoReq(req)
+      if (!sessao) {
+        res.status(401).json({ erro: 'Sessão inválida ou ausente. Faça login no terminal.' })
+        return
+      }
+      if (sessao.perfil !== 'admin') {
+        res.status(403).json({ erro: 'Acesso restrito ao perfil administrador.' })
+        return
+      }
     }
     try {
       res.json(database.prepare(sql).all(...(Array.isArray(params) ? params : [])))
@@ -370,6 +465,19 @@ export function iniciarServidor(porta = 3210): void {
       res.status(400).json({ erro: 'sql obrigatório' })
       return
     }
+    // Endpoint de LEITURA: escrita aqui (INSERT/UPDATE/DELETE/REPLACE, inclusive
+    // via RETURNING) contornaria a autorização por sessão/perfil. Só admin pode.
+    if (tabelaEscrita(sql)) {
+      const sessao = sessaoAtualDoReq(req)
+      if (!sessao) {
+        res.status(401).json({ erro: 'Sessão inválida ou ausente. Faça login no terminal.' })
+        return
+      }
+      if (sessao.perfil !== 'admin') {
+        res.status(403).json({ erro: 'Acesso restrito ao perfil administrador.' })
+        return
+      }
+    }
     try {
       const result = database.prepare(sql).get(...(Array.isArray(params) ? params : []))
       res.json(result ?? null)
@@ -384,6 +492,19 @@ export function iniciarServidor(porta = 3210): void {
     if (typeof sql !== 'string') {
       res.status(400).json({ erro: 'sql obrigatório' })
       return
+    }
+    // Proteção de contorno: escrita em tabelas sensíveis (usuarios/permissoes)
+    // exige sessão 'admin'. Leituras continuam liberadas com sessão válida.
+    if (ehEscritaSensivel(sql)) {
+      const sessao = sessaoAtualDoReq(req)
+      if (!sessao) {
+        res.status(401).json({ erro: 'Sessão inválida ou ausente. Faça login no terminal.' })
+        return
+      }
+      if (sessao.perfil !== 'admin') {
+        res.status(403).json({ erro: 'Acesso restrito ao perfil administrador.' })
+        return
+      }
     }
     try {
       const result = database.prepare(sql).run(...(Array.isArray(params) ? params : []))
@@ -422,6 +543,19 @@ export function iniciarServidor(porta = 3210): void {
     if (statements.length > 5000) {
       res.status(400).json({ ok: false, erro: 'Máximo de 5000 statements por transação.' })
       return
+    }
+    // Proteção de contorno: qualquer statement que escreva em tabelas sensíveis
+    // (usuarios/permissoes) exige sessão 'admin' — mesmo via lote transacional.
+    if (statements.some((st) => ehEscritaSensivel(st?.sql))) {
+      const sessao = sessaoAtualDoReq(req)
+      if (!sessao) {
+        res.status(401).json({ ok: false, erro: 'Sessão inválida ou ausente. Faça login no terminal.' })
+        return
+      }
+      if (sessao.perfil !== 'admin') {
+        res.status(403).json({ ok: false, erro: 'Acesso restrito ao perfil administrador.' })
+        return
+      }
     }
     const resultados: { changes: number; lastInsertRowid: number }[] = []
     database.exec('BEGIN IMMEDIATE')
@@ -479,34 +613,151 @@ export function iniciarServidor(porta = 3210): void {
     res.json({ ok: true })
   })
 
-  app.post('/api/auth/criarUsuario', somenteLocal, (req, res) => {
+  // Retorna 403 com mensagem de erro padrão quando o usuário da sessão não pode
+  // operar sobre um usuário-alvo (não-admin tentando tocar em admin).
+  function bloquearEscalada(alvo: { id: number; perfil: string } | undefined, res: express.Response): boolean {
+    if (alvo?.perfil === 'admin') {
+      res.status(403).json({ ok: false, erro: 'Somente o administrador pode gerenciar usuários com perfil administrador.' })
+      return true
+    }
+    return false
+  }
+
+  app.post('/api/auth/criarUsuario', requerAdminOuGerente, (req, res) => {
     const dados = req.body ?? {}
+    const sessao = sessaoAtualDoReq(req)
+    const perfil = String(dados.perfil ?? 'vendedor')
+    // Gerente não pode criar administrador — só o admin cria admin.
+    if (sessao?.perfil !== 'admin' && perfil === 'admin') {
+      res.status(403).json({ ok: false, erro: 'Somente o administrador pode criar usuários com perfil administrador.' })
+      return
+    }
     const hash = hashSenhaForte(String(dados.senha ?? ''))
     const result = database
       .prepare(`INSERT INTO usuarios (nome, login, senha_hash, perfil, comissao_percent) VALUES (?, ?, ?, ?, ?)`)
-      .run(String(dados.nome), String(dados.login), hash, String(dados.perfil), Number(dados.comissao) || 0)
+      .run(String(dados.nome), String(dados.login), hash, perfil, Number(dados.comissao) || 0)
     res.json({ ok: true, id: Number(result.lastInsertRowid) })
   })
 
-  app.post('/api/auth/alterarSenha', somenteLocal, (req, res) => {
+  app.post('/api/auth/alterarSenha', requerAdminOuGerente, (req, res) => {
     const { usuarioId, novaSenha } = req.body ?? {}
+    const alvo = database.prepare(`SELECT id, perfil FROM usuarios WHERE id = ?`).get(Number(usuarioId)) as
+      | { id: number; perfil: string }
+      | undefined
+    if (bloquearEscalada(alvo, res)) return
     const hash = hashSenhaForte(String(novaSenha ?? ''))
     database.prepare(`UPDATE usuarios SET senha_hash = ? WHERE id = ?`).run(hash, Number(usuarioId))
+    invalidarSessoesDoUsuario(Number(usuarioId))
     res.json({ ok: true })
   })
 
-  app.post('/api/auth/atualizarUsuario', somenteLocal, (req, res) => {
+  app.post('/api/auth/atualizarUsuario', requerAdminOuGerente, (req, res) => {
     const { usuarioId, nome, login, perfil, comissao, senha } = req.body ?? {}
+    const id = Number(usuarioId)
+    const sessao = sessaoAtualDoReq(req)
+    const alvo = database.prepare(`SELECT id, perfil FROM usuarios WHERE id = ?`).get(id) as
+      | { id: number; perfil: string }
+      | undefined
+    if (bloquearEscalada(alvo, res)) return
+    const novoPerfil = String(perfil ?? alvo?.perfil ?? 'vendedor')
+    // Gerente não pode elevar ninguém a admin (nem na edição).
+    if (sessao?.perfil !== 'admin' && novoPerfil === 'admin') {
+      res.status(403).json({ ok: false, erro: 'Somente o administrador pode conceder o perfil administrador.' })
+      return
+    }
+    const mudouPerfil = alvo && alvo.perfil !== novoPerfil
     if (senha) {
       const hash = hashSenhaForte(String(senha))
       database
         .prepare(`UPDATE usuarios SET nome = ?, login = ?, perfil = ?, comissao_percent = ?, senha_hash = ? WHERE id = ?`)
-        .run(String(nome), String(login), String(perfil), Number(comissao) || 0, hash, Number(usuarioId))
+        .run(String(nome), String(login), novoPerfil, Number(comissao) || 0, hash, id)
     } else {
       database
         .prepare(`UPDATE usuarios SET nome = ?, login = ?, perfil = ?, comissao_percent = ? WHERE id = ?`)
-        .run(String(nome), String(login), String(perfil), Number(comissao) || 0, Number(usuarioId))
+        .run(String(nome), String(login), novoPerfil, Number(comissao) || 0, id)
     }
+    // Se o perfil mudou (ou a senha), invalida as sessões do alvo para o novo
+    // perfil valer (ex.: rebaixado de admin → não pode mais agir como admin).
+    if (mudouPerfil) invalidarSessoesDoUsuario(id)
+    res.json({ ok: true })
+  })
+
+  // Atualiza apenas as opções de permissão do usuário (usar_web/usar_app/
+  // limitar_desconto/desconto_max_percent). Via rota dedicada para que a tela
+  // não precise usar /api/db/run em tabelas sensíveis (evita escalada por SQL).
+  app.post('/api/auth/atualizarOpcoes', requerAdminOuGerente, (req, res) => {
+    const { usuarioId, usar_web, usar_app, limitar_desconto, desconto_max_percent } = req.body ?? {}
+    const id = Number(usuarioId)
+    const alvo = database.prepare(`SELECT id, perfil FROM usuarios WHERE id = ?`).get(id) as
+      | { id: number; perfil: string }
+      | undefined
+    if (bloquearEscalada(alvo, res)) return
+    database
+      .prepare(`UPDATE usuarios SET usar_web = ?, usar_app = ?, limitar_desconto = ?, desconto_max_percent = ? WHERE id = ?`)
+      .run(
+        usar_web ? 1 : 0,
+        usar_app ? 1 : 0,
+        limitar_desconto ? 1 : 0,
+        Number(desconto_max_percent) || 0,
+        id
+      )
+    res.json({ ok: true })
+  })
+
+  // Substitui a lista de permissões de um usuário por uma nova. NÃO toca em admin.
+  app.post('/api/auth/atualizarPermissoes', requerAdminOuGerente, (req, res) => {
+    const { usuarioId, modulos } = req.body ?? {}
+    const id = Number(usuarioId)
+    const alvo = database.prepare(`SELECT id, perfil FROM usuarios WHERE id = ?`).get(id) as
+      | { id: number; perfil: string }
+      | undefined
+    if (bloquearEscalada(alvo, res)) return
+    const lista = Array.isArray(modulos) ? modulos.map((m) => String(m)) : []
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      database.prepare(`DELETE FROM permissoes WHERE usuario_id = ?`).run(id)
+      const ins = database.prepare(`INSERT INTO permissoes (usuario_id, modulo) VALUES (?, ?)`)
+      for (const m of lista) ins.run(id, m)
+      database.exec('COMMIT')
+    } catch (err) {
+      database.exec('ROLLBACK')
+      res.status(400).json({ ok: false, erro: (err as Error).message })
+      return
+    }
+    res.json({ ok: true })
+  })
+
+  // Desativa/ativa um usuário. Não toca em admin.
+  app.post('/api/auth/ativarDesativar', requerAdminOuGerente, (req, res) => {
+    const { usuarioId, ativo } = req.body ?? {}
+    const id = Number(usuarioId)
+    const alvo = database.prepare(`SELECT id, perfil FROM usuarios WHERE id = ?`).get(id) as
+      | { id: number; perfil: string }
+      | undefined
+    if (bloquearEscalada(alvo, res)) return
+    database.prepare(`UPDATE usuarios SET ativo = ? WHERE id = ?`).run(ativo ? 1 : 0, id)
+    // Usuário desativado não pode manter sessão válida.
+    if (!ativo) invalidarSessoesDoUsuario(id)
+    res.json({ ok: true })
+  })
+
+  // Deleta um usuário e suas permissões. Não toca em admin nem em si mesmo
+  // (para o gerente não se auto-remover e perder o acesso).
+  app.post('/api/auth/deletar', requerAdminOuGerente, (req, res) => {
+    const { usuarioId } = req.body ?? {}
+    const id = Number(usuarioId)
+    const sessao = sessaoAtualDoReq(req)
+    if (sessao && sessao.usuario_id === id) {
+      res.status(403).json({ ok: false, erro: 'Você não pode deletar o próprio usuário.' })
+      return
+    }
+    const alvo = database.prepare(`SELECT id, perfil FROM usuarios WHERE id = ?`).get(id) as
+      | { id: number; perfil: string }
+      | undefined
+    if (bloquearEscalada(alvo, res)) return
+    database.prepare(`DELETE FROM permissoes WHERE usuario_id = ?`).run(id)
+    database.prepare(`DELETE FROM usuarios WHERE id = ?`).run(id)
+    invalidarSessoesDoUsuario(id)
     res.json({ ok: true })
   })
 
@@ -610,7 +861,7 @@ export function iniciarServidor(porta = 3210): void {
     res.json(getStatus())
   })
 
-  app.post('/api/catalogo/config', somenteLocal, (req, res) => {
+  app.post('/api/catalogo/config', requerAdmin, (req, res) => {
     const { github_token, github_repo, github_branch, site_url, nome_loja } = req.body ?? {}
     // Se o token vier mascarado (••••••) ou vazio, preserva o token atual (não sobrescreve)
     let token: string | undefined
@@ -641,7 +892,7 @@ export function iniciarServidor(porta = 3210): void {
     res.json(await testarConexao())
   })
 
-  app.post('/api/catalogo/backup-config', somenteLocal, (_req, res) => {
+  app.post('/api/catalogo/backup-config', requerAdmin, (_req, res) => {
     const r = backupConfigCatalogo()
     if (r.ok) {
       registrarLog('SUCCESS', `Backup da configuração do catálogo salvo em ${r.arquivo}`)
@@ -655,7 +906,7 @@ export function iniciarServidor(porta = 3210): void {
     res.json(getBackupConfigCatalogo())
   })
 
-  app.post('/api/catalogo/restaurar-backup-config', somenteLocal, (_req, res) => {
+  app.post('/api/catalogo/restaurar-backup-config', requerAdmin, (_req, res) => {
     const r = restaurarBackupConfigCatalogo()
     if (r.ok) {
       registrarLog('SUCCESS', 'Configuração do catálogo restaurada do backup')
@@ -693,7 +944,7 @@ export function iniciarServidor(porta = 3210): void {
     res.json({ ok: true, logs: getLogs() })
   })
 
-  app.post('/api/servidor/logs/limpar', somenteLocal, (_req, res) => {
+  app.post('/api/servidor/logs/limpar', requerAdmin, (_req, res) => {
     limparLogs()
     res.json({ ok: true })
   })
@@ -706,21 +957,21 @@ export function iniciarServidor(porta = 3210): void {
     res.json(diagnosticar())
   })
 
-  app.post('/api/servidor/corrigir', somenteLocal, (_req, res) => {
+  app.post('/api/servidor/corrigir', requerAdmin, (_req, res) => {
     const r = corrigir()
     res.json({ ok: r.ok, correcoes: r.correcoes })
   })
 
   // Chave de API: exibição/regeneração SOMENTE no computador do servidor.
-  app.get('/api/servidor/apikey', somenteLocal, (_req, res) => {
+  app.get('/api/servidor/apikey', requerAdmin, somenteLocal, (_req, res) => {
     res.json({ ok: true, api_key: getApiKey() })
   })
 
-  app.post('/api/servidor/apikey/regenerar', somenteLocal, (_req, res) => {
+  app.post('/api/servidor/apikey/regenerar', requerAdmin, somenteLocal, (_req, res) => {
     res.json({ ok: true, api_key: regenerarApiKey() })
   })
 
-  app.post('/api/servidor/zerar', somenteLocal, (req, res) => {
+  app.post('/api/servidor/zerar', requerAdmin, (req, res) => {
     const { alvos, confirmar } = req.body ?? {}
     if (confirmar !== true) {
       res.status(400).json({ ok: false, erro: 'Confirmação explícita obrigatória (confirmar: true).' })
@@ -735,7 +986,7 @@ export function iniciarServidor(porta = 3210): void {
     res.json(r)
   })
 
-  app.post('/api/servidor/restaurar', somenteLocal, (req, res) => {
+  app.post('/api/servidor/restaurar', requerAdmin, (req, res) => {
     const { arquivo } = req.body ?? {}
     if (typeof arquivo !== 'string' || !arquivo) {
       res.status(400).json({ ok: false, erro: 'Arquivo de backup obrigatório.' })
@@ -762,7 +1013,7 @@ export function iniciarServidor(porta = 3210): void {
     }
   })
 
-  app.post('/api/servidor/encerrar', somenteLocal, (_req, res) => {
+  app.post('/api/servidor/encerrar', requerAdmin, (_req, res) => {
     res.json({ ok: true })
     setTimeout(() => {
       try { process.exit(0) } catch { /* ignore */ }
@@ -1077,6 +1328,14 @@ export function iniciarServidor(porta = 3210): void {
     }
     const usuarioId = corpo.usuario_id != null ? Number(corpo.usuario_id) : null
 
+    // Identidade autorizadora = SESSÃO (nunca o corpo). O terminal envia o token
+    // de sessão; é a fonte confiável de perfil e permissões.
+    const autenticado = usuarioAutenticadoDoReq(req)
+    if (!autenticado) {
+      res.status(401).json({ ok: false, erro: 'Sessão inválida ou ausente. Faça login no terminal.' })
+      return
+    }
+
     // Regra de estoque: bloqueia venda sem saldo, SALVO se a configuração da loja
     // permitir ou o operador tiver a permissão específica.
     let permitirSemEstoque = false
@@ -1084,11 +1343,19 @@ export function iniciarServidor(porta = 3210): void {
       const cfgRow = database.prepare(`SELECT valor FROM config WHERE chave = 'pdv_permitir_sem_estoque'`).get() as { valor: string } | undefined
       if ((cfgRow?.valor ?? '0') === '1') permitirSemEstoque = true
     } catch { /* ignore */ }
-    if (!permitirSemEstoque && usuarioId != null) {
-      const perm = database
-        .prepare(`SELECT 1 AS ok FROM permissoes WHERE usuario_id = ? AND modulo = 'vender_sem_estoque'`)
-        .get(usuarioId)
-      if (perm) permitirSemEstoque = true
+    if (!permitirSemEstoque && usuarioTemPermissao(autenticado.id, 'vender_sem_estoque')) {
+      permitirSemEstoque = true
+    }
+
+    // Limite de desconto: se o usuário autenticado tem limitar_desconto ativo,
+    // o desconto não pode passar de desconto_max_percent% do subtotal.
+    if (autenticado.limitar_desconto === 1) {
+      const max = Math.max(0, Math.min(100, Number(autenticado.desconto_max_percent) || 0))
+      const maxDesconto = subtotal * (max / 100)
+      if (desconto > maxDesconto + 0.009) {
+        res.status(400).json({ ok: false, erro: `Desconto máximo permitido para este usuário: ${max}% (R$ ${maxDesconto.toFixed(2)}).` })
+        return
+      }
     }
 
     // Caixa informado precisa existir e estar aberto.
@@ -1119,8 +1386,19 @@ export function iniciarServidor(porta = 3210): void {
     try {
       const vendaId = Number(
         database
-          .prepare(`INSERT INTO vendas (numero, tipo, subtotal, desconto, total, status, vendedor_id, caixa_id) VALUES (?, 'balcao', ?, ?, ?, 'concluida', ?, ?)`)
-          .run(numero, subtotal, desconto, total, corpo.vendedor_id != null ? Number(corpo.vendedor_id) : null, caixaId).lastInsertRowid
+          .prepare(`INSERT INTO vendas (numero, tipo, subtotal, desconto, total, status, vendedor_id, caixa_id, cliente_id, observacoes, taxa_entrega, cliente_endereco) VALUES (?, 'balcao', ?, ?, ?, 'concluida', ?, ?, ?, ?, ?, ?)`)
+          .run(
+            numero,
+            subtotal,
+            desconto,
+            total,
+            corpo.vendedor_id != null ? Number(corpo.vendedor_id) : null,
+            caixaId,
+            corpo.cliente_id != null ? Number(corpo.cliente_id) : null,
+            corpo.observacoes ? String(corpo.observacoes) : null,
+            Number(corpo.taxa_entrega ?? 0),
+            corpo.cliente_endereco ? String(corpo.cliente_endereco) : null
+          ).lastInsertRowid
       )
       const insItem = database.prepare(
         `INSERT INTO venda_itens (venda_id, produto_id, nome_produto, quantidade, preco_unitario, subtotal, desconto, observacao)
@@ -1174,19 +1452,27 @@ export function iniciarServidor(porta = 3210): void {
   // ---------- Cancelamentos (transacionais, com autorização) ----------
 
   app.post('/api/vendas/cancelar', (req, res) => {
-    const { venda_id, usuario_id } = req.body ?? {}
+    const { venda_id } = req.body ?? {}
     const vid = Number(venda_id)
     if (!Number.isInteger(vid) || vid <= 0) {
       res.status(400).json({ ok: false, erro: 'venda_id obrigatório.' })
       return
     }
-    const u = database.prepare(`SELECT id, nome, perfil FROM usuarios WHERE id = ? AND ativo = 1`).get(Number(usuario_id)) as
-      | { id: number; nome: string; perfil: string }
-      | undefined
-    if (!u || (u.perfil !== 'admin' && u.perfil !== 'gerente')) {
-      res.status(403).json({ ok: false, erro: 'Somente administrador ou gerente pode cancelar vendas.' })
+    // Autorização pela SESSÃO (nunca pelo corpo). Admin/gerente podem sempre;
+    // demais usuários precisam da permissão fina 'vendas_cancelar'.
+    const autenticado = usuarioAutenticadoDoReq(req)
+    const podeCancelar =
+      !!autenticado &&
+      (autenticado.perfil === 'admin' || autenticado.perfil === 'gerente' || usuarioTemPermissao(autenticado.id, 'vendas_cancelar'))
+    if (!autenticado) {
+      res.status(401).json({ ok: false, erro: 'Sessão inválida ou ausente. Faça login no terminal.' })
       return
     }
+    if (!podeCancelar) {
+      res.status(403).json({ ok: false, erro: 'Somente administrador, gerente ou usuário com permissão de cancelar vendas.' })
+      return
+    }
+    const u = autenticado
     const venda = database.prepare(`SELECT id, numero, total, status, caixa_id FROM vendas WHERE id = ?`).get(vid) as
       | { id: number; numero: string; total: number; status: string; caixa_id: number | null }
       | undefined
@@ -1232,19 +1518,26 @@ export function iniciarServidor(porta = 3210): void {
   })
 
   app.post('/api/pedidos/cancelar', (req, res) => {
-    const { pedido_id, usuario_id } = req.body ?? {}
+    const { pedido_id } = req.body ?? {}
     const pid = Number(pedido_id)
     if (!Number.isInteger(pid) || pid <= 0) {
       res.status(400).json({ ok: false, erro: 'pedido_id obrigatório.' })
       return
     }
-    const u = database.prepare(`SELECT id, nome, perfil FROM usuarios WHERE id = ? AND ativo = 1`).get(Number(usuario_id)) as
-      | { id: number; nome: string; perfil: string }
-      | undefined
-    if (!u || (u.perfil !== 'admin' && u.perfil !== 'gerente')) {
-      res.status(403).json({ ok: false, erro: 'Somente administrador ou gerente pode cancelar pedidos.' })
+    // Autorização pela SESSÃO (nunca pelo corpo).
+    const autenticado = usuarioAutenticadoDoReq(req)
+    const podeCancelar =
+      !!autenticado &&
+      (autenticado.perfil === 'admin' || autenticado.perfil === 'gerente' || usuarioTemPermissao(autenticado.id, 'vendas_cancelar'))
+    if (!autenticado) {
+      res.status(401).json({ ok: false, erro: 'Sessão inválida ou ausente. Faça login no terminal.' })
       return
     }
+    if (!podeCancelar) {
+      res.status(403).json({ ok: false, erro: 'Somente administrador, gerente ou usuário com permissão de cancelar pedidos.' })
+      return
+    }
+    const u = autenticado
     const pedido = database.prepare(`SELECT id, numero, status FROM pedidos WHERE id = ?`).get(pid) as
       | { id: number; numero: string; status: string }
       | undefined
@@ -1362,8 +1655,7 @@ export function iniciarServidor(porta = 3210): void {
       res.status(400).json({ ok: false, erro: 'Arquivo ZIP obrigatório.' })
       return
     }
-    const modoSimulacao = req.get('x-simular') === '1' || req.get('x-simular') === 'true'
-    const r = await importarNex(buffer, nome, { simular: modoSimulacao })
+    const r = await importarNex(buffer, nome)
     res.json(r)
   })
 

@@ -29,7 +29,19 @@ const api = {
       perfil: string
       comissao: number
       senha?: string
-    }) => ipcRenderer.invoke('auth:atualizarUsuario', dados)
+    }) => ipcRenderer.invoke('auth:atualizarUsuario', dados),
+    atualizarOpcoes: (dados: {
+      usuarioId: number
+      usar_web: boolean
+      usar_app: boolean
+      limitar_desconto: boolean
+      desconto_max_percent: number
+    }) => ipcRenderer.invoke('auth:atualizarOpcoes', dados),
+    atualizarPermissoes: (dados: { usuarioId: number; modulos: string[] }) =>
+      ipcRenderer.invoke('auth:atualizarPermissoes', dados),
+    ativarDesativar: (dados: { usuarioId: number; ativo: boolean }) =>
+      ipcRenderer.invoke('auth:ativarDesativar', dados),
+    deletar: (dados: { usuarioId: number }) => ipcRenderer.invoke('auth:deletar', dados)
   },
   backup: {
     manual: () => ipcRenderer.invoke('backup:manual')
