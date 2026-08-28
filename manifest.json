@@ -1,0 +1,12 @@
+{
+  "versao": "1.0.12",
+  "baixar": "https://github.com/shishastorearaucaria3-source/tabacaria-updates-homolog/releases/download/v1.0.12/NossoSistema-Setup.exe",
+  "tamanho": 109904224,
+  "sha256": "ed5e35ac4b9d17ab54c55d7407ce0007c994796209b303aa9d8bfbf94363fd01",
+  "obrigatoria": false,
+  "rollback": false,
+  "notas": [
+    "Nova versão 1.0.12 do sistema."
+  ],
+  "url": "https://github.com/shishastorearaucaria3-source/tabacaria-updates-homolog/releases/tag/v1.0.12"
+}
